@@ -15,7 +15,7 @@ import { Command } from "commander";
 import { existsSync, statSync } from "node:fs";
 import { readFile, unlink, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { fork, spawn, execSync } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import {
@@ -105,10 +105,12 @@ program
       return;
     }
 
-    // Fork a detached child process running the internal worker command
-    const child = fork(
-      __filename,
+    // Spawn a detached child process running the internal worker command
+    // (spawn rather than fork — fork doesn't work cleanly with ESM modules)
+    const child = spawn(
+      process.execPath,
       [
+        __filename,
         "_proxy-worker",
         "--port",
         String(port),
