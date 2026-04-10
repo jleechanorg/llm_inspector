@@ -32,26 +32,13 @@ function resolveUpstream(
     return { baseUrl: envOverride, rewrittenPath: path };
   }
 
-  // /claude/v1/* -> strip /claude prefix, forward to Anthropic
-  if (path.startsWith("/claude/")) {
-    return {
-      baseUrl: "https://api.anthropic.com",
-      rewrittenPath: path.replace(/^\/claude/, ""),
-    };
-  }
-
-  // Anthropic paths
-  if (path.startsWith("/v1/messages") || path.startsWith("/v1/complete")) {
-    return { baseUrl: "https://api.anthropic.com", rewrittenPath: path };
-  }
-
-  // OpenAI paths
-  if (path.startsWith("/v1/chat/completions")) {
-    return { baseUrl: "https://api.openai.com", rewrittenPath: path };
-  }
-
-  // Default to Anthropic
-  return { baseUrl: "https://api.anthropic.com", rewrittenPath: path };
+  // Default: forward to ccproxy at :8000/claude (ccproxy's Anthropic-compat route)
+  // This matches what we measured: Claude Code sends to /v1/messages,
+  // ccproxy expects requests at /claude/v1/messages
+  return {
+    baseUrl: "http://127.0.0.1:8000",
+    rewrittenPath: "/claude" + path,
+  };
 }
 
 /**

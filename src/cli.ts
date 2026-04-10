@@ -15,7 +15,7 @@ import { Command } from "commander";
 import { existsSync, statSync } from "node:fs";
 import { readFile, unlink, readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { fork } from "node:child_process";
+import { fork, spawn, execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import {
@@ -48,6 +48,40 @@ program
   .action(async (opts) => {
     const port = parseInt(opts.port, 10);
     const pidFile = getPidFile();
+
+    // ── Start ccproxy if not already running ────────────────────────────────
+    if (!opts.upstream) {
+      let ccproxyRunning = false;
+      try {
+        // Check if port 8000 is in use (ccproxy's default)
+        execSync("lsof -ti:8000", { stdio: "pipe" });
+        ccproxyRunning = true;
+      } catch {
+        ccproxyRunning = false;
+      }
+
+      if (!ccproxyRunning) {
+        const ccproxyBin = process.env.CCPROXY_BIN || "ccproxy";
+        try {
+          const ccproxy = spawn(ccproxyBin, ["serve", "--port", "8000"], {
+            detached: true,
+            stdio: "ignore",
+          });
+          ccproxy.unref();
+          await new Promise((resolve) => setTimeout(resolve, 800));
+          console.log("ccproxy started on port 8000 (OAuth → Anthropic).");
+        } catch {
+          console.log(
+            "Warning: could not start ccproxy. Make sure it is installed:\n  uv tool install ccproxy-api",
+          );
+          console.log(
+            "Or pass --upstream <url> to forward directly to Anthropic.",
+          );
+        }
+      } else {
+        console.log("ccproxy already running on port 8000.");
+      }
+    }
 
     // Check if already running
     if (existsSync(pidFile)) {
@@ -95,15 +129,15 @@ program
     // Give it a moment to bind the port
     await new Promise((resolve) => setTimeout(resolve, 500));
 
-    console.log(`Proxy started on port ${port} (PID ${child.pid}).`);
+    console.log(`Capture proxy started on port ${port} (PID ${child.pid}).`);
+    console.log("Chain: your tool → llm-inspector :9000 (capture) → ccproxy :8000 (OAuth) → Anthropic");
     console.log("");
     console.log("To capture Claude Code traffic, set:");
     console.log(`  export ANTHROPIC_BASE_URL=http://localhost:${port}`);
+    console.log(`  export ANTHROPIC_API_KEY=oauth-proxy`);
     console.log("");
-    console.log("To capture OpenAI traffic, set:");
-    console.log(`  export OPENAI_BASE_URL=http://localhost:${port}`);
-    console.log("");
-    console.log("Run 'llm-inspector analyze' to see token breakdown.");
+    console.log("Then run: claude --print 'hello'");
+    console.log("Then run: llm-inspector analyze");
   });
 
 // ── Internal worker process (not user-facing) ─────────────────────────────
