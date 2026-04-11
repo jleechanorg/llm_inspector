@@ -5,10 +5,13 @@
  */
 
 import { writeFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 
-const OUT_DIR = "/Users/jleechan/project_agento/worktree_compaction/docs/evidence/on-demand-stub-schema-2026-04-11";
+const SCRIPT_DIR = fileURLToPath(new URL(".", import.meta.url));
+const REPO_ROOT = resolve(SCRIPT_DIR, "../../../../");
+const OUT_DIR = resolve(REPO_ROOT, "llm_inspector/docs/evidence/on-demand-stub-schema-2026-04-11");
 
 // ── Inline the actual implementation (same as proxy.ts) ─────────────────────
 const HEAVY_TOOL_NAMES = [
@@ -297,8 +300,8 @@ writeFileSync(join(OUT_DIR, "evidence.md"), evidenceMd);
 try {
   writeFileSync(join(OUT_DIR, "metadata.json"), JSON.stringify({
     provenance: {
-      git_head: execSync("cd /Users/jleechan/project_agento/worktree_compaction && git rev-parse HEAD").toString().trim(),
-      git_branch: execSync("cd /Users/jleechan/project_agento/worktree_compaction && git branch --show-current").toString().trim(),
+      git_head: execSync("cd " + REPO_ROOT + " && git rev-parse HEAD").toString().trim(),
+      git_branch: execSync("cd " + REPO_ROOT + " && git branch --show-current").toString().trim(),
     },
     timestamp_utc: new Date().toISOString(),
     tool_mode_test: "on-demand stub-schema unit test",

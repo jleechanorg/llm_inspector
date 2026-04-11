@@ -13,12 +13,15 @@
 import { createServer } from "node:http";
 import { spawn, execSync } from "node:child_process";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const PROXY_PORT = 19999;
 const UPSTREAM_PORT = 19998;
-const CLI = "/Users/jleechan/project_agento/worktree_compaction/llm_inspector/dist/cli.js";
-const OUT_DIR = "/Users/jleechan/project_agento/worktree_compaction/docs/evidence/on-demand-stub-schema-2026-04-11";
+const SCRIPT_DIR = fileURLToPath(new URL(".", import.meta.url));
+const REPO_ROOT = resolve(SCRIPT_DIR, "../../../../");
+const OUT_DIR = resolve(REPO_ROOT, "llm_inspector/docs/evidence/on-demand-stub-schema-2026-04-11");
+const CLI = resolve(REPO_ROOT, "llm_inspector/dist/cli.js");
 const ITERATIONS = 10;
 
 // Realistic Claude Code Agent tool schema — 1368 bytes
@@ -149,7 +152,7 @@ async function runSingleIteration(iter) {
           headers: { "Content-Type": "application/json", "x-api-key": "test-key" },
           body: JSON.stringify(fullRequestBody),
         });
-      } catch {}
+      } catch (err) { console.error(`[iteration ${iter}] fetch failed: ${err.message}`); }
 
       await sleep(500);
 
@@ -185,7 +188,7 @@ async function runSingleIteration(iter) {
               total_reduction_percent: ((1 - upstreamBytes / totalOriginalSize) * 100).toFixed(1),
             };
           }
-        } catch {}
+        } catch (err) { console.error(`[iteration ${iter}] JSON parse of upstream bytes failed: ${err.message}`); }
       }
 
       proxy.kill();
@@ -226,13 +229,16 @@ async function runTest() {
     results.push({ name: `all ${ITERATIONS} runs: Agent stubbed, Bash preserved`, pass: true });
   }
 
-  // Compute statistics
+  // Compute statistics (guard against empty allEvidence if all iterations fail)
   const reductions = allEvidence.map((e) => parseFloat(e.reduction_percent));
-  const mean = reductions.reduce((a, b) => a + b, 0) / reductions.length;
-  const variance = reductions.reduce((a, b) => a + (b - mean) ** 2, 0) / reductions.length;
-  const stddev = Math.sqrt(variance);
-  const min = Math.min(...reductions);
-  const max = Math.max(...reductions);
+  let mean = 0, stddev = 0, min = 0, max = 0;
+  if (reductions.length > 0) {
+    mean = reductions.reduce((a, b) => a + b, 0) / reductions.length;
+    const variance = reductions.reduce((a, b) => a + (b - mean) ** 2, 0) / reductions.length;
+    stddev = Math.sqrt(variance);
+    min = Math.min(...reductions);
+    max = Math.max(...reductions);
+  }
 
   console.log(`\n=== Summary (N=${ITERATIONS}) ===`);
   console.log(`  Stub rate: ${passCount}/${ITERATIONS}`);
@@ -332,8 +338,8 @@ const timestamp = new Date().toISOString();
 let gitHead = "";
 let gitBranch = "";
 try {
-  gitHead = execSync("cd /Users/jleechan/project_agento/worktree_compaction && git rev-parse HEAD").toString().trim();
-  gitBranch = execSync("cd /Users/jleechan/project_agento/worktree_compaction && git branch --show-current").toString().trim();
+  gitHead = execSync("cd " + REPO_ROOT + " && git rev-parse HEAD").toString().trim();
+  gitBranch = execSync("cd " + REPO_ROOT + " && git branch --show-current").toString().trim();
 } catch {}
 
 const metadata = {

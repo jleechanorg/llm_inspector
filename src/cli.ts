@@ -45,6 +45,11 @@ program
   .option("-p, --port <port>", "Port to listen on", String(DEFAULT_PORT))
   .option("-u, --upstream <url>", "Override upstream URL")
   .option("--foreground", "Run in foreground (don't detach)")
+  .option(
+    "--tool-mode <mode>",
+    "observe (capture only), lean (strip heavy built-ins), or on-demand (stub schemas + re-issue on first heavy-tool use)",
+    "observe",
+  )
   .action(async (opts) => {
     const port = parseInt(opts.port, 10);
     const pidFile = getPidFile();
@@ -101,7 +106,7 @@ program
     if (opts.foreground) {
       // Run in foreground (blocks)
       const { startProxy } = await import("./proxy.js");
-      await startProxy({ port, upstream: opts.upstream, verbose: true });
+      await startProxy({ port, upstream: opts.upstream, verbose: true, toolMode: opts.toolMode });
       return;
     }
 
@@ -115,6 +120,8 @@ program
         "--port",
         String(port),
         ...(opts.upstream ? ["--upstream", opts.upstream] : []),
+        "--tool-mode",
+        opts.toolMode || "observe",
       ],
       {
         detached: true,
@@ -122,6 +129,7 @@ program
         env: {
           ...process.env,
           LLM_INSPECTOR_UPSTREAM: opts.upstream || "",
+          LLM_INSPECTOR_TOOL_MODE: opts.toolMode || "observe",
         },
       },
     );
@@ -131,7 +139,13 @@ program
     // Give it a moment to bind the port
     await new Promise((resolve) => setTimeout(resolve, 500));
 
-    console.log(`Capture proxy started on port ${port} (PID ${child.pid}).`);
+    const toolModeNote =
+      opts.toolMode === "lean"
+        ? " [lean: Agent/Team*/Task* stripped ~20K tokens/turn]"
+        : opts.toolMode === "on-demand"
+          ? " [on-demand: stubs + re-issue on first heavy-tool use, ~97% upfront reduction]"
+          : " [observe: capture only, no modification]";
+    console.log(`Capture proxy started on port ${port} (PID ${child.pid}).${toolModeNote}`);
     console.log("Chain: your tool → llm-inspector :9000 (capture) → ccproxy :8000 (OAuth) → Anthropic");
     console.log("");
     console.log("To capture Claude Code traffic, set:");
@@ -147,12 +161,14 @@ program
   .command("_proxy-worker", { hidden: true })
   .option("-p, --port <port>", "Port", String(DEFAULT_PORT))
   .option("-u, --upstream <url>", "Upstream URL")
+  .option("--tool-mode <mode>", "Tool mode", "observe")
   .action(async (opts) => {
     const { startProxy } = await import("./proxy.js");
     await startProxy({
       port: parseInt(opts.port, 10),
       upstream: opts.upstream,
       verbose: true,
+      toolMode: opts.toolMode,
     });
   });
 
