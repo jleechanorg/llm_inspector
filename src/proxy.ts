@@ -156,9 +156,10 @@ export async function startProxy(
     }
 
     // POST and other methods: capture body, forward, capture response
-    const rawBody = req.body as Buffer;
+    // express.raw() returns {} for bodyless methods (HEAD, OPTIONS) — normalize to empty Buffer
+    const rawBody: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
     const bodyStr = rawBody.toString("utf-8");
-    const bodySize = Buffer.byteLength(bodyStr, "utf-8");
+    const bodySize = rawBody.length;
 
     let parsedBody: CapturedRequest["body"] = {};
     try {
