@@ -1,0 +1,9 @@
+{
+  "scenarios": [
+    {
+      "name": "on-demand: Agent stubbed in real upstream request, Bash preserved",
+      "pass": true,
+      "errors": []
+    }
+  ]
+}

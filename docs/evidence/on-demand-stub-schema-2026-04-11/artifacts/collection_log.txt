@@ -1,0 +1,45 @@
+# Collection Log — on-demand-stub-schema real integration test
+
+## Collection Steps
+
+1. Run: `node docs/evidence/on-demand-stub-schema-2026-04-11/test-real-upstream.mjs`
+2. Script started mock upstream TCP server on port 19998
+3. Script started proxy on port 19999 with --tool-mode on-demand
+4. Script sent HTTP POST with realistic Agent schema (1368 bytes) through proxy
+5. Mock upstream logged 552 bytes (proxy stubbed the Agent tool)
+6. Script parsed upstream bytes and verified: Agent stubbed (1368B→206B = 84.9%), Bash preserved
+7. Output written: run.json, evidence.md, metadata.json
+
+## Artifacts Captured
+
+- test-real-upstream.mjs — Test script (primary evidence source)
+- run.json              — Machine-readable test results (1 scenario)
+- collection_log.txt    — This log
+
+## Test Output (captured)
+
+=== Real Integration Test: on-demand stub-schema ===
+
+  Mock upstream listening on 19998
+  Proxy running on 19999
+
+  Sending request:
+    Agent schema: 1368 bytes (realistic Claude Code Agent tool)
+    Total request: 1714 bytes
+  Response: HTTP 200
+
+  Upstream received: 552 bytes (of 1714 original)
+  ✅ Agent schema STUBBED in upstream request!
+     Original Agent: 1368 bytes
+     Stubbed Agent:  206 bytes
+     Reduction:     84.9%
+  ✅ Bash preserved: true
+
+=== Summary ===
+  ✅ on-demand: Agent stubbed in real upstream request, Bash preserved
+
+Overall: ✅ ALL PASS
+
+## Timestamp
+
+Test run: 2026-04-11T18:16:04.869Z
