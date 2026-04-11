@@ -27,7 +27,8 @@ Real integration test of the proxy's `--tool-mode on-demand` stub substitution b
 
 ## Limitations
 
-- N=1 sample (single run) — performance figures are point estimates, not statistical averages
+- N=10 iterations (2026-04-11) — performance figures are averages across 10 independent runs; stddev=0.0% because the system is deterministic (same input, same stub substitution each run); this demonstrates consistent behavior across process spawns, not statistical sampling of a variable system
+- Each iteration creates fresh server/process instances (no persistent connection state between runs): 2500ms proxy startup wait, 500ms post-request wait, 200ms inter-iteration delay
 - Mock upstream server (not a real Claude API) — verifies stub substitution but not end-to-end API response
 - Does not test SSE re-issue flow (requires live streaming API)
 - Does not measure actual token count savings via API
