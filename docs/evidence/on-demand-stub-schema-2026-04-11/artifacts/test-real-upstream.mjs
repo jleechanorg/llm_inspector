@@ -283,6 +283,8 @@ const runJson = {
     pass: r.pass,
     errors: [],
   })),
+  // Full evidence array: byte measurements, pass/fail details
+  evidence,
 };
 
 // Derive key metrics from evidence for the report
