@@ -29,7 +29,9 @@ function resolveUpstream(
   envOverride?: string,
 ): { baseUrl: string; rewrittenPath: string } {
   if (envOverride) {
-    return { baseUrl: envOverride, rewrittenPath: path };
+    // envOverride is the base URL (e.g. http://127.0.0.1:8001)
+    // ccproxy serves at /claude/v1/messages, so prepend /claude to path
+    return { baseUrl: envOverride, rewrittenPath: "/claude" + path };
   }
 
   // Default: forward to ccproxy at :8000/claude (ccproxy's Anthropic-compat route)
