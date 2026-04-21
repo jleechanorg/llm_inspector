@@ -1,0 +1,66 @@
+{
+  "timestamp": "2026-04-21T04:15:22.744Z",
+  "method": "POST",
+  "path": "/v1/messages",
+  "url": "/v1/messages",
+  "headers": {
+    "host": "127.0.0.1:9000",
+    "user-agent": "curl/8.7.1",
+    "accept": "*/*",
+    "content-type": "application/json",
+    "content-length": "97"
+  },
+  "body": {
+    "model": "claude-haiku-4-5-20251001",
+    "max_tokens": 50,
+    "messages": [
+      {
+        "role": "user",
+        "content": "hi"
+      }
+    ]
+  },
+  "bodySize": 97,
+  "response": {
+    "status": 200,
+    "body": {
+      "model": "claude-haiku-4-5-20251001",
+      "id": "msg_01BEp6qyAxanYNHoimWJpdMY",
+      "type": "message",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": "Hey! 👋 How's it going? What can I help you with today?"
+        }
+      ],
+      "stop_reason": "end_turn",
+      "stop_sequence": null,
+      "stop_details": null,
+      "usage": {
+        "input_tokens": 8,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation": {
+          "ephemeral_5m_input_tokens": 0,
+          "ephemeral_1h_input_tokens": 0
+        },
+        "output_tokens": 22,
+        "service_tier": "standard",
+        "inference_geo": "not_available"
+      }
+    },
+    "usage": {
+      "input_tokens": 8,
+      "cache_creation_input_tokens": 0,
+      "cache_read_input_tokens": 0,
+      "cache_creation": {
+        "ephemeral_5m_input_tokens": 0,
+        "ephemeral_1h_input_tokens": 0
+      },
+      "output_tokens": 22,
+      "service_tier": "standard",
+      "inference_geo": "not_available"
+    }
+  }
+}

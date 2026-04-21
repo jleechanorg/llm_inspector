@@ -1,0 +1,23 @@
+{
+  "timestamp": "2026-04-20T08:47:54.749Z",
+  "method": "HEAD",
+  "path": "/",
+  "url": "/",
+  "headers": {
+    "host": "localhost:9000",
+    "connection": "close",
+    "accept": "*/*",
+    "accept-language": "*",
+    "sec-fetch-mode": "cors",
+    "user-agent": "node",
+    "accept-encoding": "gzip, deflate"
+  },
+  "body": {
+    "_raw": ""
+  },
+  "bodySize": 0,
+  "response": {
+    "status": 404,
+    "body": ""
+  }
+}
