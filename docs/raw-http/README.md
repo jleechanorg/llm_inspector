@@ -8,9 +8,6 @@ Captured using mitmproxy on port 8888 with a custom addon that intercepts and re
 ## Files
 
 - `capture_*.json` — Raw capture data (full HTTP request + response)
-- `capture-sonnet.md` — Human-readable Sonnet capture summary
-- `capture-opus.md` — Human-readable Opus capture summary
-- `capture-haiku.md` — Human-readable Haiku capture summary
 
 ## Collection Method
 

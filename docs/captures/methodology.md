@@ -13,10 +13,8 @@
 4. Multiple independent sessions produce distinct captures
 
 ## Artifacts
-- `full-capture-sample.json` - Complete request/response capture from Sonnet review session
-- `system-prompt-001.txt` - Extracted system prompt (first session)
-- `system-prompt-002.txt` - Different session's system prompt
-- `metadata.json` - Collection provenance and checksums
+- 6 markdown captures (`capture-2026-04-21T05-*.md`) — Full raw HTTP request/response for Sonnet (×4), Opus (×1), Haiku (×1)
+- Source JSON captures at `~/.llm-inspector/captures/capture-2026-04-21T05-*.json`
 
 ## Verification
 - SHA256 checksums computed for all artifacts
