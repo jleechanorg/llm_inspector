@@ -156,7 +156,7 @@ function makeStubSchema(name: HeavyToolName): {
     name,
     description: descriptions[name],
     // Claude Messages API format
-    input_schema: {
+    inputSchema: {
       type: "object",
       properties: {
         task: { type: "string", description: "Task description" },
@@ -384,6 +384,60 @@ function scanBufferedSSEForStubbedTools(
     }
   }
   return detected;
+}
+
+/**
+ * Extract usage tokens from buffered SSE text.
+ *
+ * Claude API SSE streams include:
+ *   message_start: {"type":"message_start","message":{"usage":{"input_tokens":X,"output_tokens":0}}}
+ *   message_delta: {"type":"message_delta","delta":{},"usage":{"output_tokens":Y}}
+ *
+ * Returns combined usage: input_tokens from message_start + output_tokens from message_delta.
+ */
+function extractSSEUsage(
+  bufferedText: string,
+): { input_tokens?: number; output_tokens?: number } | undefined {
+  let inputTokens: number | undefined;
+  let outputTokens: number | undefined;
+
+  const lines = bufferedText.split("\n");
+  for (const line of lines) {
+    if (!line.startsWith("data:")) continue;
+    const dataStr = line.slice(5).trim();
+    if (!dataStr || dataStr === "[DONE]" || dataStr === "[done]") continue;
+
+    let data: Record<string, unknown>;
+    try {
+      data = JSON.parse(dataStr);
+    } catch {
+      continue;
+    }
+
+    const type = typeof data.type === "string" ? data.type : "";
+
+    if (type === "message_start") {
+      const msg = data.message as Record<string, unknown> | undefined;
+      const usage = msg?.usage as
+        | { input_tokens?: number; output_tokens?: number }
+        | undefined;
+      if (usage?.input_tokens != null) inputTokens = usage.input_tokens;
+      if (usage?.output_tokens != null) outputTokens = usage.output_tokens;
+    }
+
+    if (type === "message_delta") {
+      const usage = data.usage as
+        | { output_tokens?: number }
+        | undefined;
+      if (usage?.output_tokens != null) outputTokens = usage.output_tokens;
+    }
+  }
+
+  if (inputTokens == null && outputTokens == null) return undefined;
+  const result: { input_tokens?: number; output_tokens?: number } = {};
+  if (inputTokens != null) result.input_tokens = inputTokens;
+  if (outputTokens != null) result.output_tokens = outputTokens;
+  return result;
 }
 
 /**
@@ -673,7 +727,27 @@ export async function startProxy(
                     forwardHeaders,
                   );
                 res.write(reIssuedBody);
-                captured.response = { status: reIssuedStatus };
+                // Parse usage from re-issued response
+                let reIssuedUsage:
+                  | { input_tokens?: number; output_tokens?: number }
+                  | undefined;
+                try {
+                  const reParsed = JSON.parse(reIssuedBody) as Record<
+                    string,
+                    unknown
+                  >;
+                  reIssuedUsage = reParsed?.usage as
+                    | { input_tokens?: number; output_tokens?: number }
+                    | undefined;
+                } catch {
+                  // Re-issued response may be SSE — try SSE parsing
+                  reIssuedUsage = extractSSEUsage(reIssuedBody);
+                }
+                captured.response = {
+                  status: reIssuedStatus,
+                  body: reIssuedBody,
+                  usage: reIssuedUsage,
+                };
               } catch (reErr) {
                 console.error(
                   `[llm-inspector] on-demand re-issue failed: ${reErr}. Falling back to stubbed response.`,
@@ -682,12 +756,14 @@ export async function startProxy(
                 for (const sseChunk of buf.sseChunks) {
                   res.write(sseChunk);
                 }
+                const fallbackUsage = extractSSEUsage(fullText);
                 captured.response = {
                   status: statusCode,
                   body: {
                     _on_demand_reissue_failed: String(reErr),
                     _stubbed_tools_detected: [...detected],
                   },
+                  usage: fallbackUsage,
                 };
               }
             } else {
@@ -696,7 +772,8 @@ export async function startProxy(
               for (const sseChunk of buf.sseChunks) {
                 res.write(sseChunk);
               }
-              captured.response = { status: statusCode };
+              const sseUsage = extractSSEUsage(fullText);
+              captured.response = { status: statusCode, usage: sseUsage };
             }
 
             // Cleanup per-request buffer
@@ -708,7 +785,8 @@ export async function startProxy(
             res.end();
           });
         } else if (isStreaming) {
-          // Buffer streaming response to capture it
+          // Buffer streaming response to capture usage from SSE events
+          // Forward chunks in real-time while buffering for post-stream parsing
           const chunks: Buffer[] = [];
           proxyRes.on("data", (chunk: Buffer) => {
             chunks.push(chunk);
@@ -717,16 +795,20 @@ export async function startProxy(
           proxyRes.on("end", () => {
             try {
               const fullBody = Buffer.concat(chunks).toString("utf-8");
-              let parsedResponse: unknown;
-              try {
-                parsedResponse = JSON.parse(fullBody);
-              } catch {
-                parsedResponse = fullBody;
-              }
+              // Extract usage from SSE message_start + message_delta events
+              const usage = extractSSEUsage(fullBody);
+
               captured.response = {
                 status: statusCode,
-                body: parsedResponse,
+                body: fullBody,
+                usage,
               };
+
+              if (verbose && usage) {
+                console.log(
+                  `[llm-inspector] SSE usage: input=${usage.input_tokens ?? "?"} output=${usage.output_tokens ?? "?"}`,
+                );
+              }
             } catch {
               captured.response = { status: statusCode };
             }
