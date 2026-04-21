@@ -67,6 +67,10 @@ export interface CapturedRequest {
     body?: unknown;
     usage?: { input_tokens?: number; output_tokens?: number };
   };
+  /** Raw HTTP request (HTTP/1.1 format: headers + body) */
+  request_raw?: string;
+  /** Raw HTTP response (HTTP/1.1 format: status line + headers + body) */
+  response_raw?: string;
   /** Capture file path (runtime only, not persisted) */
   filePath?: string;
 }

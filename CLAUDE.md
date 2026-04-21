@@ -5,25 +5,26 @@ Captures and analyzes LLM API request payloads to understand context window usag
 ## Architecture
 
 ```
-Claude Code → llm-inspector :9000 → ccproxy :8000 → Anthropic API
+Claude Code → llm-inspector :9000 → ccproxy :8001 → Anthropic/MiniMax API
 ```
 
-- **Port 9000**: Capture proxy (this repo) - captures full JSON request payloads to disk
-- **Port 8000**: ccproxy - handles OAuth token refresh
-- `llm-inspector start` auto-starts ccproxy if not running
+- **Port 9000**: Capture proxy (this repo) - captures full HTTP request/response bytes to disk
+- **Port 8001**: ccproxy-api (Python) - handles OAuth token refresh and routes to Anthropic/MiniMax API
+- **Start**: `npm run start -- --upstream http://127.0.0.1:8001`
+- Raw HTTP fields: `request_raw` (full HTTP request) and `response_raw` (full HTTP response)
 
 ## Key Files
 
 - `src/` - TypeScript source
 - `docs/` - Documentation
-- `install.sh` - Installation script
+- `docs/raw-http/` - Raw HTTP captures from mitmproxy
 
 ## Commands
 
 ```bash
 npm install       # Install dependencies
 npm run build     # Compile TypeScript
-llm-inspector start  # Start capture chain
+npm run start     # Start capture chain (pass --upstream http://127.0.0.1:8001)
 ```
 
 ## Tech Stack

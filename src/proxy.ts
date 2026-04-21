@@ -1,10 +1,10 @@
 /**
  * Transparent capture proxy for LLM API requests.
+ * Uses raw Node.js http (no Express) to capture full HTTP bytes.
  * Intercepts requests, saves full payloads to disk,
  * forwards to upstream API, and streams responses back.
  */
 
-import express from "express";
 import http from "node:http";
 import https from "node:https";
 import { writeFile, mkdir } from "node:fs/promises";
@@ -16,90 +16,22 @@ import {
   getPidFile,
   getConfigDir,
   redactHeaders,
-  estimateTokens,
   DEFAULT_PORT,
 } from "./utils.js";
 
-/**
- * Auto-detect upstream base URL from request path.
- * Returns the base URL and the (possibly rewritten) path.
- */
-function resolveUpstream(
-  path: string,
-  envOverride?: string,
-): { baseUrl: string; rewrittenPath: string } {
-  if (envOverride) {
-    // envOverride is the base URL (e.g. http://127.0.0.1:8001)
-    // ccproxy serves at /claude/v1/messages, so prepend /claude to path
-    return { baseUrl: envOverride, rewrittenPath: "/claude" + path };
-  }
+// ---------------------------------------------------------------------------
+// Tool mode infrastructure (preserved from original)
+// ---------------------------------------------------------------------------
 
-  // Default: forward to ccproxy at :8000/claude (ccproxy's Anthropic-compat route)
-  // This matches what we measured: Claude Code sends to /v1/messages,
-  // ccproxy expects requests at /claude/v1/messages
-  return {
-    baseUrl: "http://127.0.0.1:8000",
-    rewrittenPath: "/claude" + path,
-  };
-}
+export type ToolMode = "observe" | "lean" | "on-demand";
 
-/**
- * Compute a quick summary of component sizes from the request body.
- */
-function computeSummary(body: CapturedRequest["body"]): Record<string, number> {
-  const summary: Record<string, number> = {};
-
-  if (body.system) {
-    const sysStr =
-      typeof body.system === "string"
-        ? body.system
-        : JSON.stringify(body.system);
-    summary["system_prompt"] = Buffer.byteLength(sysStr, "utf-8");
-  }
-
-  if (body.tools && Array.isArray(body.tools)) {
-    let builtinBytes = 0;
-    let mcpBytes = 0;
-    for (const tool of body.tools) {
-      const toolStr = JSON.stringify(tool);
-      const size = Buffer.byteLength(toolStr, "utf-8");
-      if (tool.name.startsWith("mcp__")) {
-        mcpBytes += size;
-      } else {
-        builtinBytes += size;
-      }
-    }
-    if (builtinBytes > 0) summary["builtin_tools"] = builtinBytes;
-    if (mcpBytes > 0) summary["mcp_tools"] = mcpBytes;
-  }
-
-  if (body.messages && Array.isArray(body.messages)) {
-    let msgBytes = 0;
-    for (const msg of body.messages) {
-      msgBytes += Buffer.byteLength(JSON.stringify(msg), "utf-8");
-    }
-    summary["messages"] = msgBytes;
-  }
-
-  return summary;
-}
-
-/**
- * Built-in tools considered "lean" — always safe to include.
- * Heavy tools (Agent, TeamCreate, etc.) are stripped in lean mode to save ~20K tokens/turn.
- */
 const LEAN_TOOLS = new Set([
   "Bash", "Read", "Write", "Edit", "MultiEdit",
   "Glob", "Grep", "WebFetch", "WebSearch",
   "AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "NotebookEdit",
-  // Context7 is tiny and generally useful
   "mcp__context7__resolve-library-id", "mcp__context7__get-library-docs",
 ]);
 
-/**
- * Heavy built-in tools that get stubbed in on-demand mode.
- * Each stub is ~100 bytes vs the full schema which can be 3-18KB.
- */
 const HEAVY_TOOL_NAMES = [
   "Agent",
   "TeamCreate",
@@ -122,17 +54,11 @@ const HEAVY_TOOL_NAMES = [
 
 type HeavyToolName = (typeof HEAVY_TOOL_NAMES)[number];
 
-/**
- * Minimal stub schema for a heavy tool — ~100 bytes vs 3-18KB full schema.
- * Preserves callability: model sees name + description + empty input schema,
- * generates tool_use, and the proxy can re-issue with the real schema.
- */
 function makeStubSchema(name: HeavyToolName): {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
 } {
-  // Per-tool one-liner descriptions
   const descriptions: Record<HeavyToolName, string> = {
     Agent: "Spawn an autonomous sub-agent to handle a task.",
     TeamCreate: "Create a team of agents to coordinate on a shared goal.",
@@ -155,34 +81,15 @@ function makeStubSchema(name: HeavyToolName): {
   return {
     name,
     description: descriptions[name],
-    // Claude Messages API format
-    inputSchema: {
-      type: "object",
-      properties: {
-        task: { type: "string", description: "Task description" },
-      },
-      required: ["task"],
-    },
+    inputSchema: { type: "object", properties: {}, required: [] },
   };
 }
 
-/**
- * Build a map of heavy tool name -> stub schema.
- */
-function buildStubSchemaMap(): Map<string, ReturnType<typeof makeStubSchema>> {
-  const map = new Map<string, ReturnType<typeof makeStubSchema>>();
-  for (const name of HEAVY_TOOL_NAMES) {
-    map.set(name, makeStubSchema(name));
-  }
-  return map;
+const STUB_SCHEMA_MAP = new Map<string, ReturnType<typeof makeStubSchema>>();
+for (const name of HEAVY_TOOL_NAMES) {
+  STUB_SCHEMA_MAP.set(name, makeStubSchema(name));
 }
 
-const STUB_SCHEMA_MAP = buildStubSchemaMap();
-
-/**
- * Replace heavy tool schemas with stubs in on-demand mode.
- * Returns the modified body and a map of original tool -> stub (for re-issue expansion).
- */
 function applyStubToolFilter(
   body: Record<string, unknown>,
 ): {
@@ -202,7 +109,6 @@ function applyStubToolFilter(
     const name = typeof t.name === "string" ? t.name : "";
     const stub = STUB_SCHEMA_MAP.get(name);
     if (stub) {
-      // Replace with stub; save original for re-issue
       kept.push(stub);
       stubbedTools.set(name, tool);
     } else {
@@ -216,12 +122,6 @@ function applyStubToolFilter(
   };
 }
 
-/**
- * Strip heavy built-in tools from a request body in lean mode.
- * MCP tools (mcp__* prefix) are always kept — they're registered explicitly
- * and their cost is already optimized by the mcp-trim bead.
- * Returns the modified body and list of stripped tool names.
- */
 function applyLeanToolFilter(
   body: Record<string, unknown>,
 ): { modified: Record<string, unknown>; stripped: string[] } {
@@ -236,7 +136,6 @@ function applyLeanToolFilter(
   for (const tool of tools) {
     const t = tool as Record<string, unknown>;
     const name = typeof t.name === "string" ? t.name : "";
-    // Keep all MCP tools (mcp__ prefix) and lean built-ins
     if (name.startsWith("mcp__") || LEAN_TOOLS.has(name)) {
       kept.push(tool);
     } else {
@@ -247,83 +146,42 @@ function applyLeanToolFilter(
   if (stripped.length === 0) {
     return { modified: body, stripped: [] };
   }
-
-  return {
-    modified: { ...body, tools: kept },
-    stripped,
-  };
+  return { modified: { ...body, tools: kept }, stripped };
 }
 
-export type ToolMode = "observe" | "lean" | "on-demand";
-
 // ---------------------------------------------------------------------------
-// On-demand stub-schema re-issue infrastructure
+// On-demand re-issue infrastructure
 // ---------------------------------------------------------------------------
 
-/**
- * Per-request buffer state for on-demand mode.
- * All fields are scoped to a single request-id to ensure concurrent
- * requests don't interfere with each other.
- */
 interface RequestBuffer {
-  /** Original request body before stubbing (for re-issue) */
   originalBody: Record<string, unknown>;
-  /** Original raw body bytes */
   originalRawBody: Buffer;
-  /** Map of stubbed tool name -> original full tool schema */
   stubbedTools: Map<string, unknown>;
-  /** Buffered SSE chunks from the stubbed response */
   sseChunks: string[];
-  /** Set of stubbed tool names detected in the SSE stream */
   detectedStubbedTools: Set<string>;
-  /** Whether re-issue has been initiated (prevents double re-issue) */
   reIssuing: boolean;
-  /** Whether the stubbed response has been forwarded to client */
   stubbedForwarded: boolean;
 }
 
-/**
- * Map of request-id -> per-request buffer state.
- * Key is extracted from request body or generated fresh.
- */
 const requestBuffers = new Map<string, RequestBuffer>();
-
-/** Counter for generating request IDs when none exists in body */
 let requestIdCounter = 0;
 function nextRequestId(): string {
   return `req-${Date.now()}-${++requestIdCounter}`;
 }
 
-/**
- * Extract message ID from request body for request identification.
- * Returns a stable ID if present, otherwise generates one.
- */
 function extractRequestId(body: Record<string, unknown>): string {
-  // Claude API uses a top-level id field
   if (typeof body.id === "string" && body.id.length > 0) {
     return body.id;
   }
-  // Fall back to generated ID
   return nextRequestId();
 }
 
-/**
- * Parse a single SSE data line and check for stubbed tool usage.
- * Returns the set of stubbed tool names detected in this chunk.
- *
- * Claude SSE format:
- *   event: content_block_start
- *   data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","name":"Agent",...}}
- *   event: content_block_delta
- *   data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"..."}}
- */
 function parseSSEForStubbedTools(
   line: string,
   stubbedToolNames: Set<string>,
 ): Set<string> {
   const detected = new Set<string>();
   if (!line.startsWith("data:")) return detected;
-
   const dataStr = line.slice(5).trim();
   if (!dataStr || dataStr === "[DONE]" || dataStr === "[done]") return detected;
 
@@ -335,8 +193,6 @@ function parseSSEForStubbedTools(
   }
 
   const type = typeof data.type === "string" ? data.type : "";
-
-  // content_block_start: identifies which tool is being invoked
   if (type === "content_block_start") {
     const cb = data.content_block as Record<string, unknown> | undefined;
     if (cb && cb.type === "tool_use") {
@@ -346,63 +202,29 @@ function parseSSEForStubbedTools(
       }
     }
   }
-
-  // content_block_delta with tool_use: the arguments are streaming in
-  // We detect stubbed tools here too in case name came in a prior chunk
-  if (type === "content_block_delta") {
-    const delta = data.delta as Record<string, unknown> | undefined;
-    if (delta && delta.type === "input_json_delta") {
-      // Tool arguments are streaming — check if any prior content_block_start
-      // for a stubbed tool is referenced via index
-      // For simplicity: if we've seen any stubbed tool in this stream, we track it
-      // The index maps to a content_block that started earlier
-      const index = typeof data.index === "number" ? data.index : -1;
-      if (index >= 0) {
-        // We can't know the name from delta alone without maintaining index->name map
-        // For now, rely on content_block_start detection
-      }
-    }
-  }
-
   return detected;
 }
 
-/**
- * Synchronously scan buffered SSE text for stubbed tool usage.
- * Used when stream ends to check if any chunk contained stubbed tools.
- */
 function scanBufferedSSEForStubbedTools(
   bufferedText: string,
   stubbedToolNames: Set<string>,
 ): Set<string> {
   const detected = new Set<string>();
-  const lines = bufferedText.split("\n");
-  for (const line of lines) {
-    const found = parseSSEForStubbedTools(line, stubbedToolNames);
-    for (const name of found) {
+  for (const line of bufferedText.split("\n")) {
+    for (const name of parseSSEForStubbedTools(line, stubbedToolNames)) {
       detected.add(name);
     }
   }
   return detected;
 }
 
-/**
- * Extract usage tokens from buffered SSE text.
- *
- * Claude API SSE streams include:
- *   message_start: {"type":"message_start","message":{"usage":{"input_tokens":X,"output_tokens":0}}}
- *   message_delta: {"type":"message_delta","delta":{},"usage":{"output_tokens":Y}}
- *
- * Returns combined usage: input_tokens from message_start + output_tokens from message_delta.
- */
 function extractSSEUsage(
   bufferedText: string,
 ): { input_tokens?: number; output_tokens?: number } | undefined {
   let inputTokens: number | undefined;
   let outputTokens: number | undefined;
 
-  const lines = bufferedText.split("\n");
-  for (const line of lines) {
+  for (const line of bufferedText.split("\n")) {
     if (!line.startsWith("data:")) continue;
     const dataStr = line.slice(5).trim();
     if (!dataStr || dataStr === "[DONE]" || dataStr === "[done]") continue;
@@ -426,9 +248,7 @@ function extractSSEUsage(
     }
 
     if (type === "message_delta") {
-      const usage = data.usage as
-        | { output_tokens?: number }
-        | undefined;
+      const usage = data.usage as { output_tokens?: number } | undefined;
       if (usage?.output_tokens != null) outputTokens = usage.output_tokens;
     }
   }
@@ -440,24 +260,16 @@ function extractSSEUsage(
   return result;
 }
 
-/**
- * Re-issue the original request with full (non-stubbed) tool schemas.
- * Used when the stubbed response triggered use of a heavy tool.
- *
- * Returns the re-issued response body as a string, or throws on failure.
- */
 async function reIssueWithFullSchema(
   originalBody: Record<string, unknown>,
   stubbedTools: Map<string, unknown>,
   upstream: URL,
   forwardHeaders: Record<string, string>,
 ): Promise<{ body: string; status: number }> {
-  // Restore full schemas: replace stubs with original full tools
   const fullTools = originalBody.tools
     ? (originalBody.tools as unknown[]).map((tool) => {
         const t = tool as Record<string, unknown>;
         const name = typeof t.name === "string" ? t.name : "";
-        // If this is a stub (from STUB_SCHEMA_MAP), replace with original
         if (STUB_SCHEMA_MAP.has(name)) {
           const original = stubbedTools.get(name);
           if (original) return original;
@@ -466,11 +278,7 @@ async function reIssueWithFullSchema(
       })
     : [];
 
-  const fullBody = {
-    ...originalBody,
-    tools: fullTools,
-  };
-
+  const fullBody = { ...originalBody, tools: fullTools };
   const bodyStr = JSON.stringify(fullBody);
   const bodyBuf = Buffer.from(bodyStr, "utf-8");
   const headers = { ...forwardHeaders, "content-length": String(bodyBuf.length) };
@@ -495,18 +303,112 @@ async function reIssueWithFullSchema(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Raw HTTP capture
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a raw HTTP request string from method/path/headers/body.
+ */
+function buildRawHttpRequest(
+  method: string,
+  path: string,
+  headers: Record<string, string>,
+  body: Buffer,
+): string {
+  const lines = [`${method} ${path} HTTP/1.1`];
+  for (const [k, v] of Object.entries(headers)) {
+    lines.push(`${k}: ${v}`);
+  }
+  lines.push("", "");
+  return lines.join("\r\n") + body.toString("utf-8");
+}
+
+/**
+ * Wrap response.write / response.end to capture raw bytes.
+ */
+class RawCaptureResponse {
+  private chunks: Buffer[] = [];
+  private rawChunks: string[] = [];
+  private headerWritten = false;
+  private statusCode = 200;
+  private reason = "OK";
+  private headers: Record<string, string | string[]> = {};
+
+  constructor(
+    private res: http.ServerResponse,
+    private captureCb: (rawResponse: string) => void,
+  ) {}
+
+  setStatus(code: number, reason: string) {
+    this.statusCode = code;
+    this.reason = reason;
+  }
+
+  setHeader(key: string, value: string | string[]) {
+    this.headers[key] = value;
+  }
+
+  write(chunk: Buffer | string): boolean {
+    const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+    this.chunks.push(buf);
+    this.rawChunks.push(buf.toString("utf-8"));
+    if (!this.headerWritten) {
+      this.res.writeHead(this.statusCode, this.headers);
+      this.headerWritten = true;
+    }
+    const ok = this.res.write(buf);
+    return ok;
+  }
+
+  end(chunk?: Buffer | string): void {
+    if (chunk) {
+      const buf = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+      this.chunks.push(buf);
+      this.rawChunks.push(buf.toString("utf-8"));
+    }
+    if (!this.headerWritten) {
+      this.res.writeHead(this.statusCode, this.headers);
+      this.headerWritten = true;
+    }
+    const raw = this.buildRawResponse();
+    this.captureCb(raw);
+    this.res.end();
+  }
+
+  private buildRawResponse(): string {
+    const lines = [`HTTP/1.1 ${this.statusCode} ${this.reason}`];
+    for (const [k, v] of Object.entries(this.headers)) {
+      if (Array.isArray(v)) {
+        for (const val of v) lines.push(`${k}: ${val}`);
+      } else {
+        lines.push(`${k}: ${v}`);
+      }
+    }
+    lines.push("", "");
+    return lines.join("\r\n") + this.rawChunks.join("");
+  }
+
+  getHeaderWritten(): boolean {
+    return this.headerWritten;
+  }
+
+  getChunks(): Buffer[] {
+    return this.chunks;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Proxy server
+// ---------------------------------------------------------------------------
+
 export interface StartProxyOptions {
   port?: number;
   upstream?: string;
   verbose?: boolean;
-  /** observe: capture only (default); lean: strip heavy built-in tools */
   toolMode?: ToolMode;
 }
 
-/**
- * Start the capture proxy server.
- * Returns the HTTP server instance.
- */
 export async function startProxy(
   options: StartProxyOptions = {},
 ): Promise<http.Server> {
@@ -521,42 +423,51 @@ export async function startProxy(
 
   const captureDir = await ensureCaptureDir();
 
-  const app = express();
+  const server = http.createServer();
 
-  // Parse raw body for all content types
-  app.use(
-    express.raw({
-      type: "*/*",
-      limit: "50mb",
-    }),
-  );
-
-  // Handle all requests
-  app.all("*", async (req, res) => {
+  server.on("request", async (req, res) => {
     const timestamp = new Date().toISOString();
-    const method = req.method;
-    const originalPath = req.path;
+    const method = req.method || "GET";
+    const originalPath = req.url?.split("?")[0] || "/";
+    const rawUrl = req.url || "";
 
-    const { baseUrl, rewrittenPath } = resolveUpstream(
-      originalPath,
-      upstreamOverride,
+    // Collect raw request bytes
+    const reqChunks: Buffer[] = [];
+    for await (const chunk of req) {
+      reqChunks.push(chunk);
+    }
+    const rawRequestBody = Buffer.concat(reqChunks);
+
+    // Parse headers
+    const reqHeaders: Record<string, string> = {};
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (v === undefined) continue;
+      reqHeaders[k] = Array.isArray(v) ? v.join(", ") : v;
+    }
+
+    const upstreamBase = upstreamOverride || "http://127.0.0.1:8000";
+    const rewrittenPath = upstreamOverride
+      ? "/claude" + (req.url || "/")
+      : "/claude" + (req.url || "/");
+    const upstream = new URL(rewrittenPath, upstreamBase);
+
+    // Build raw HTTP request for capture
+    const rawHttpRequest = buildRawHttpRequest(
+      method,
+      req.url || "/",
+      reqHeaders,
+      rawRequestBody,
     );
-    const upstream = new URL(rewrittenPath, baseUrl);
 
-    // GET requests: passthrough without capture
+    // GET: passthrough without capture
     if (method === "GET") {
       if (verbose) {
         console.log(`[llm-inspector] GET ${originalPath} -> ${upstream.href}`);
       }
-
       const transport = upstream.protocol === "https:" ? https : http;
-      const forwardHeaders: Record<string, string> = {};
-      for (const [key, val] of Object.entries(req.headers)) {
-        if (key === "host") continue;
-        if (typeof val === "string") forwardHeaders[key] = val;
-        else if (Array.isArray(val)) forwardHeaders[key] = val.join(", ");
-      }
+      const forwardHeaders = { ...reqHeaders };
       forwardHeaders["host"] = upstream.host;
+      delete forwardHeaders["content-length"];
 
       const proxyReq = transport.request(
         upstream.href,
@@ -568,67 +479,54 @@ export async function startProxy(
       );
       proxyReq.on("error", (err) => {
         console.error(`[llm-inspector] Proxy error: ${err.message}`);
-        res.status(502).json({ error: "Upstream error", message: err.message });
+        res.status(502).end();
       });
       proxyReq.end();
       return;
     }
 
-    // POST and other methods: capture body, forward, capture response
-    // express.raw() returns {} for bodyless methods (HEAD, OPTIONS) — normalize to empty Buffer
-    const rawBody: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-    const bodyStr = rawBody.toString("utf-8");
-    const bodySize = rawBody.length;
-
-    let parsedBody: CapturedRequest["body"] = {};
+    // Parse body
+    const bodyStr = rawRequestBody.toString("utf-8");
+    let parsedBody: Record<string, unknown> = {};
     try {
       parsedBody = JSON.parse(bodyStr);
     } catch {
-      parsedBody = { _raw: bodyStr } as unknown as CapturedRequest["body"];
+      parsedBody = { _raw: bodyStr };
     }
 
-    // Build headers record (for storage — redacted)
-    const headerRecord: Record<string, string> = {};
-    for (const [key, val] of Object.entries(req.headers)) {
-      if (typeof val === "string") headerRecord[key] = val;
-      else if (Array.isArray(val)) headerRecord[key] = val.join(", ");
-    }
+    // Compute request body size
+    const bodySize = rawRequestBody.length;
 
+    // Build captured request
     const captured: CapturedRequest = {
       timestamp,
       method,
       path: originalPath,
-      url: req.url,
-      headers: redactHeaders(headerRecord),
-      body: parsedBody,
+      url: rawUrl,
+      headers: redactHeaders(reqHeaders),
+      body: parsedBody as CapturedRequest["body"],
       bodySize,
     };
 
-    // Apply tool mode filtering before forwarding
-    let forwardBody = rawBody;
-    let forwardBodySize = bodySize;
+    // Apply tool mode filtering
+    let forwardBody = rawRequestBody;
     let strippedTools: string[] = [];
     let stubbedToolsMap = new Map<string, unknown>();
     let requestId = "";
 
-    // On-demand mode: replace heavy tool schemas with stubs
     if (toolMode === "on-demand" && method === "POST") {
-      const { modified, stubbedTools } = applyStubToolFilter(
-        parsedBody as Record<string, unknown>,
-      );
+      const { modified, stubbedTools } = applyStubToolFilter(parsedBody);
       if (stubbedTools.size > 0) {
         stubbedToolsMap = stubbedTools;
-        requestId = extractRequestId(parsedBody as Record<string, unknown>);
+        requestId = extractRequestId(parsedBody);
         const newBodyStr = JSON.stringify(modified);
         forwardBody = Buffer.from(newBodyStr, "utf-8");
-        forwardBodySize = forwardBody.length;
         captured.body = modified as CapturedRequest["body"];
-        captured.bodySize = forwardBodySize;
+        captured.bodySize = forwardBody.length;
 
-        // Initialize per-request buffer (Safeguard 3: per-request-id isolation)
         requestBuffers.set(requestId, {
-          originalBody: parsedBody as Record<string, unknown>,
-          originalRawBody: rawBody,
+          originalBody: parsedBody,
+          originalRawBody: rawRequestBody,
           stubbedTools: stubbedToolsMap,
           sseChunks: [],
           detectedStubbedTools: new Set(),
@@ -638,46 +536,39 @@ export async function startProxy(
       }
     }
 
-    // Lean mode: strip heavy tools entirely
     if (toolMode === "lean" && method === "POST") {
-      const { modified, stripped } = applyLeanToolFilter(
-        parsedBody as Record<string, unknown>,
-      );
+      const { modified, stripped } = applyLeanToolFilter(parsedBody);
       if (stripped.length > 0) {
         strippedTools = stripped;
         const newBodyStr = JSON.stringify(modified);
         forwardBody = Buffer.from(newBodyStr, "utf-8");
-        forwardBodySize = forwardBody.length;
-        // Update parsedBody so the capture reflects what was actually sent
         captured.body = modified as CapturedRequest["body"];
-        captured.bodySize = forwardBodySize;
+        captured.bodySize = forwardBody.length;
       }
     }
 
     if (verbose) {
       const model = parsedBody.model || "unknown";
-      const strippedNote =
+      const note =
         strippedTools.length > 0
-          ? ` [lean: stripped ${strippedTools.length} tools: ${strippedTools.join(", ")}]`
+          ? ` [lean: stripped ${strippedTools.length} tools]`
           : stubbedToolsMap.size > 0
-            ? ` [on-demand: stubbed ${stubbedToolsMap.size} tools: ${[...stubbedToolsMap.keys()].join(", ")}]`
+            ? ` [on-demand: stubbed ${stubbedToolsMap.size} tools]`
             : "";
       console.log(
-        `[llm-inspector] ${method} ${originalPath} -> ${upstream.href} (model: ${model}, ${bodySize} bytes → ${forwardBodySize} bytes)${strippedNote}`,
+        `[llm-inspector] ${method} ${originalPath} -> ${upstream.href} (${model}, ${bodySize}B -> ${forwardBody.length}B)${note}`,
       );
     }
 
-    // Build forward headers (original, non-redacted)
-    const forwardHeaders: Record<string, string> = {};
-    for (const [key, val] of Object.entries(req.headers)) {
-      if (key === "host" || key === "content-length") continue;
-      if (typeof val === "string") forwardHeaders[key] = val;
-      else if (Array.isArray(val)) forwardHeaders[key] = val.join(", ");
-    }
+    // Build forward headers
+    const forwardHeaders: Record<string, string> = { ...reqHeaders };
     forwardHeaders["host"] = upstream.host;
-    forwardHeaders["content-length"] = String(forwardBodySize);
+    forwardHeaders["content-length"] = String(forwardBody.length);
 
     const transport = upstream.protocol === "https:" ? https : http;
+
+    // Capture object for raw response
+    let rawResponse = "";
 
     const proxyReq = transport.request(
       upstream.href,
@@ -687,38 +578,42 @@ export async function startProxy(
         const contentType = (proxyRes.headers["content-type"] as string) || "";
         const isStreaming = contentType.includes("text/event-stream");
 
-        // Forward all response headers
-        res.writeHead(statusCode, proxyRes.headers);
+        const captureRes = new RawCaptureResponse(res, (raw) => {
+          rawResponse = raw;
+        });
+        captureRes.setStatus(statusCode, proxyRes.reason || "OK");
+        for (const [k, v] of Object.entries(proxyRes.headers)) {
+          if (v !== undefined) captureRes.setHeader(k, v);
+        }
 
         if (isStreaming && requestId && requestBuffers.has(requestId)) {
-          // ── On-demand SSE mode: buffer ALL chunks, scan for stubbed tool use ──
-          // Safeguard 1: buffer ALL SSE from byte 1 (not just after tool_use detection)
+          // On-demand SSE mode
           const buf = requestBuffers.get(requestId)!;
           const stubbedNames = new Set([...buf.stubbedTools.keys()]);
           const allChunks: Buffer[] = [];
 
           proxyRes.on("data", (chunk: Buffer) => {
             allChunks.push(chunk);
+            captureRes.write(chunk);
           });
 
           proxyRes.on("end", async () => {
-            // Scan buffered text for any stubbed tool usage
             const fullText = Buffer.concat(allChunks).toString("utf-8");
             const detected = scanBufferedSSEForStubbedTools(fullText, stubbedNames);
             buf.sseChunks = allChunks.map((c) => c.toString("utf-8"));
             buf.detectedStubbedTools = detected;
 
+            captured.request_raw = rawHttpRequest;
+
             if (detected.size > 0 && !buf.reIssuing) {
-              // ── Re-issue with full schemas ──
               buf.reIssuing = true;
               if (verbose) {
                 console.log(
-                  `[llm-inspector] on-demand: detected stubbed tools [${[...detected].join(", ")}] — re-issuing with full schemas`,
+                  `[llm-inspector] on-demand: detected stubbed tools [${[...detected].join(", ")}] — re-issuing`,
                 );
               }
 
               try {
-                // Safeguard 4: graceful fallback if re-issue fails
                 const { body: reIssuedBody, status: reIssuedStatus } =
                   await reIssueWithFullSchema(
                     buf.originalBody,
@@ -726,23 +621,19 @@ export async function startProxy(
                     upstream,
                     forwardHeaders,
                   );
-                res.write(reIssuedBody);
-                // Parse usage from re-issued response
+
                 let reIssuedUsage:
                   | { input_tokens?: number; output_tokens?: number }
                   | undefined;
                 try {
-                  const reParsed = JSON.parse(reIssuedBody) as Record<
-                    string,
-                    unknown
-                  >;
+                  const reParsed = JSON.parse(reIssuedBody) as Record<string, unknown>;
                   reIssuedUsage = reParsed?.usage as
                     | { input_tokens?: number; output_tokens?: number }
                     | undefined;
                 } catch {
-                  // Re-issued response may be SSE — try SSE parsing
                   reIssuedUsage = extractSSEUsage(reIssuedBody);
                 }
+                captured.response_raw = reIssuedBody;
                 captured.response = {
                   status: reIssuedStatus,
                   body: reIssuedBody,
@@ -750,108 +641,96 @@ export async function startProxy(
                 };
               } catch (reErr) {
                 console.error(
-                  `[llm-inspector] on-demand re-issue failed: ${reErr}. Falling back to stubbed response.`,
+                  `[llm-inspector] on-demand re-issue failed: ${reErr}. Falling back.`,
                 );
-                // Fallback: forward stubbed response as degraded-but-complete
                 for (const sseChunk of buf.sseChunks) {
-                  res.write(sseChunk);
+                  captureRes.write(Buffer.from(sseChunk));
                 }
-                const fallbackUsage = extractSSEUsage(fullText);
                 captured.response = {
                   status: statusCode,
-                  body: {
-                    _on_demand_reissue_failed: String(reErr),
-                    _stubbed_tools_detected: [...detected],
-                  },
-                  usage: fallbackUsage,
+                  body: { _on_demand_reissue_failed: String(reErr) },
                 };
               }
             } else {
-              // No stubbed tools detected — forward stubbed response
               buf.stubbedForwarded = true;
               for (const sseChunk of buf.sseChunks) {
-                res.write(sseChunk);
+                captureRes.write(Buffer.from(sseChunk));
               }
-              const sseUsage = extractSSEUsage(fullText);
-              captured.response = { status: statusCode, usage: sseUsage };
+              captured.response = { status: statusCode };
             }
 
-            // Cleanup per-request buffer
+            // end() triggers the callback that sets rawResponse, so call it BEFORE reading rawResponse
+            captureRes.end();
+            captured.response_raw = rawResponse;
             requestBuffers.delete(requestId);
-
             saveCapture(captured, captureDir).catch((e) =>
               console.error(`[llm-inspector] Save error: ${e}`),
             );
-            res.end();
           });
         } else if (isStreaming) {
-          // Buffer streaming response to capture usage from SSE events
-          // Forward chunks in real-time while buffering for post-stream parsing
+          // Normal SSE mode — stream + buffer for usage
           const chunks: Buffer[] = [];
           proxyRes.on("data", (chunk: Buffer) => {
             chunks.push(chunk);
-            res.write(chunk);
+            captureRes.write(chunk);
           });
           proxyRes.on("end", () => {
-            try {
-              const fullBody = Buffer.concat(chunks).toString("utf-8");
-              // Extract usage from SSE message_start + message_delta events
-              const usage = extractSSEUsage(fullBody);
+            const fullBody = Buffer.concat(chunks).toString("utf-8");
+            const usage = extractSSEUsage(fullBody);
 
-              captured.response = {
-                status: statusCode,
-                body: fullBody,
-                usage,
-              };
+            captured.request_raw = rawHttpRequest;
+            captured.response = {
+              status: statusCode,
+              body: fullBody,
+              usage,
+            };
 
-              if (verbose && usage) {
-                console.log(
-                  `[llm-inspector] SSE usage: input=${usage.input_tokens ?? "?"} output=${usage.output_tokens ?? "?"}`,
-                );
-              }
-            } catch {
-              captured.response = { status: statusCode };
+            if (verbose && usage) {
+              console.log(
+                `[llm-inspector] SSE usage: input=${usage.input_tokens ?? "?"} output=${usage.output_tokens ?? "?"}`,
+              );
             }
+
+            // end() triggers the callback that sets rawResponse, so call it BEFORE reading rawResponse
+            captureRes.end();
+            captured.response_raw = rawResponse;
             saveCapture(captured, captureDir).catch((e) =>
               console.error(`[llm-inspector] Save error: ${e}`),
             );
-            res.end();
           });
         } else {
-          // Buffer non-streaming response to capture it
+          // Non-streaming — buffer full response
           const chunks: Buffer[] = [];
           proxyRes.on("data", (chunk: Buffer) => {
             chunks.push(chunk);
-            res.write(chunk);
+            captureRes.write(chunk);
           });
           proxyRes.on("end", () => {
+            const fullBody = Buffer.concat(chunks).toString("utf-8");
+            let parsedResponse: unknown;
             try {
-              const fullBody = Buffer.concat(chunks).toString("utf-8");
-              let parsedResponse: unknown;
-              try {
-                parsedResponse = JSON.parse(fullBody);
-              } catch {
-                parsedResponse = fullBody;
-              }
-
-              const respObj = parsedResponse as Record<string, unknown>;
-              const usage = respObj?.usage as
-                | { input_tokens?: number; output_tokens?: number }
-                | undefined;
-
-              captured.response = {
-                status: statusCode,
-                body: parsedResponse,
-                usage,
-              };
+              parsedResponse = JSON.parse(fullBody);
             } catch {
-              captured.response = { status: statusCode };
+              parsedResponse = fullBody;
             }
 
+            const respObj = parsedResponse as Record<string, unknown>;
+            const usage = respObj?.usage as
+              | { input_tokens?: number; output_tokens?: number }
+              | undefined;
+
+            captured.request_raw = rawHttpRequest;
+            captured.response = {
+              status: statusCode,
+              body: parsedResponse,
+              usage,
+            };
+            // end() triggers the callback that sets rawResponse, so call it BEFORE reading rawResponse
+            captureRes.end();
+            captured.response_raw = rawResponse;
             saveCapture(captured, captureDir).catch((e) =>
               console.error(`[llm-inspector] Save error: ${e}`),
             );
-            res.end();
           });
         }
       },
@@ -860,8 +739,9 @@ export async function startProxy(
     proxyReq.on("error", (err) => {
       console.error(`[llm-inspector] Upstream error: ${err.message}`);
       captured.response = { status: 502 };
+      captured.request_raw = rawHttpRequest;
       saveCapture(captured, captureDir).catch(() => {});
-      res.status(502).json({ error: "Upstream error", message: err.message });
+      res.status(502).end();
     });
 
     proxyReq.write(forwardBody);
@@ -869,8 +749,7 @@ export async function startProxy(
   });
 
   return new Promise<http.Server>((resolve, reject) => {
-    const server = app.listen(port, async () => {
-      // Ensure config dir exists and write PID file
+    server.listen(port, async () => {
       const configDir = getConfigDir();
       if (!existsSync(configDir)) {
         await mkdir(configDir, { recursive: true });
@@ -887,14 +766,14 @@ export async function startProxy(
 
       resolve(server);
     });
-
     server.on("error", reject);
   });
 }
 
-/**
- * Save a captured request and its summary to disk.
- */
+// ---------------------------------------------------------------------------
+// Capture + summary saving
+// ---------------------------------------------------------------------------
+
 async function saveCapture(
   captured: CapturedRequest,
   captureDir: string,
@@ -905,9 +784,40 @@ async function saveCapture(
 
   await writeFile(filepath, JSON.stringify(captured, null, 2));
 
-  // Also save a component-size summary file
-  const summary = computeSummary(captured.body);
-  summary["total_body_size"] = captured.bodySize;
+  const summary: Record<string, number> = {};
+  if (captured.body) {
+    const body = captured.body as Record<string, unknown>;
+    if (body.system) {
+      const sysStr =
+        typeof body.system === "string"
+          ? body.system
+          : JSON.stringify(body.system);
+      summary["system_prompt"] = Buffer.byteLength(sysStr, "utf-8");
+    }
+    if (Array.isArray(body.tools)) {
+      let builtinBytes = 0;
+      let mcpBytes = 0;
+      for (const tool of body.tools) {
+        const size = Buffer.byteLength(JSON.stringify(tool), "utf-8");
+        if (typeof (tool as Record<string, unknown>).name === "string" &&
+            (tool as Record<string, unknown>).name.toString().startsWith("mcp__")) {
+          mcpBytes += size;
+        } else {
+          builtinBytes += size;
+        }
+      }
+      if (builtinBytes > 0) summary["builtin_tools"] = builtinBytes;
+      if (mcpBytes > 0) summary["mcp_tools"] = mcpBytes;
+    }
+    if (Array.isArray(body.messages)) {
+      let msgBytes = 0;
+      for (const msg of body.messages) {
+        msgBytes += Buffer.byteLength(JSON.stringify(msg), "utf-8");
+      }
+      summary["messages"] = msgBytes;
+    }
+  }
+  summary["total_body_size"] = captured.bodySize || 0;
   if (captured.response?.usage) {
     if (captured.response.usage.input_tokens) {
       summary["response_input_tokens"] = captured.response.usage.input_tokens;
