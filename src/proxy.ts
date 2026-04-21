@@ -708,12 +708,28 @@ export async function startProxy(
             res.end();
           });
         } else if (isStreaming) {
-          // Normal passthrough streaming (no stubbed tools in request)
+          // Buffer streaming response to capture it
+          const chunks: Buffer[] = [];
           proxyRes.on("data", (chunk: Buffer) => {
+            chunks.push(chunk);
             res.write(chunk);
           });
           proxyRes.on("end", () => {
-            captured.response = { status: statusCode };
+            try {
+              const fullBody = Buffer.concat(chunks).toString("utf-8");
+              let parsedResponse: unknown;
+              try {
+                parsedResponse = JSON.parse(fullBody);
+              } catch {
+                parsedResponse = fullBody;
+              }
+              captured.response = {
+                status: statusCode,
+                body: parsedResponse,
+              };
+            } catch {
+              captured.response = { status: statusCode };
+            }
             saveCapture(captured, captureDir).catch((e) =>
               console.error(`[llm-inspector] Save error: ${e}`),
             );
