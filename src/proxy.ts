@@ -446,8 +446,9 @@ export async function startProxy(
     }
 
     const upstreamBase = upstreamOverride || "http://127.0.0.1:8000";
+    // ccproxy-api expects /claude prefix; direct upstreams (Wafer, Anthropic) don't
     const rewrittenPath = upstreamOverride
-      ? "/claude" + (req.url || "/")
+      ? (req.url || "/")
       : "/claude" + (req.url || "/");
     const upstream = new URL(rewrittenPath, upstreamBase);
 

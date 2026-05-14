@@ -25,13 +25,36 @@ Anthropic API
 
 **Requirements:** Node.js 18+, Python 3.9+
 
-### One-liner (installs both ccproxy-api and llm-inspector)
+### One-liner (installs both ccproxy-api and llm-inspector, sets up auto-start via launchd)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/jleechanorg/llm_inspector/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/jleechanorg/llm_inspector/main/scripts/llm-inspector-install.sh | bash
 ```
 
-### Manual
+### Or run locally after cloning
+
+```bash
+git clone https://github.com/jleechanorg/llm_inspector.git
+cd llm_inspector
+./scripts/llm-inspector-install.sh
+```
+
+The install script:
+1. Installs `ccproxy-api` (Python OAuth proxy) via `uv` or `pip`
+2. Builds the llm-inspector Node.js package
+3. Creates a launchd agent (`~/Library/LaunchAgents/com.jleechan.llm-inspector.plist`) for auto-start on login
+4. Loads the launchd agent
+5. Creates `~/.ccproxy/config.yaml` with default settings
+6. Refreshes the OAuth token
+
+After install, add to your shell profile (`~/.zshrc`):
+
+```bash
+export ANTHROPIC_BASE_URL=http://localhost:9000
+export ANTHROPIC_API_KEY=oauth-proxy
+```
+
+### Manual install (without launchd)
 
 ```bash
 # 1. Install ccproxy-api (Python OAuth proxy)
@@ -41,7 +64,10 @@ uv tool install ccproxy-api   # or: pip install ccproxy-api
 ccproxy auth refresh claude-api
 
 # 3. Install llm-inspector
-npm install -g llm-inspector
+npm install -g /path/to/llm_inspector
+
+# 4. Start manually
+llm-inspector start
 ```
 
 ## Quick Start

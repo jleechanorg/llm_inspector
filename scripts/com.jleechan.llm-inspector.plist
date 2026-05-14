@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jleechan.llm-inspector</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jleechan/.nvm/versions/node/v22.22.0/bin/node</string>
+        <string>/Users/jleechan/projects_other/llm_inspector/dist/cli.js</string>
+        <string>_proxy-worker</string>
+        <string>--port</string>
+        <string>9000</string>
+        <string>--tool-mode</string>
+        <string>observe</string>
+    </array>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/jleechan/.llm-inspector/launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jleechan/.llm-inspector/launchd.err.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>LLM_INSPECTOR_UPSTREAM</key>
+        <string>http://127.0.0.1:8001</string>
+        <key>LLM_INSPECTOR_TOOL_MODE</key>
+        <string>observe</string>
+    </dict>
+</dict>
+</plist>
