@@ -5,6 +5,9 @@ import {
   applyLeanOnDemandFilter,
   LEAN_REMOVE_LIST,
   STUB_SCHEMA_MAP,
+  parseModeFeatures,
+  estimateInputTokens,
+  WaferFixPatcher,
 } from "./filters.js";
 
 const chromeTool = { name: "mcp__claude-in-chrome__navigate", description: "nav", input_schema: {} };
@@ -128,5 +131,117 @@ describe("applyLeanOnDemandFilter", () => {
     expect(modified).toBe(body);
     expect(stripped).toHaveLength(0);
     expect(stubbedTools.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseModeFeatures
+// ---------------------------------------------------------------------------
+describe("parseModeFeatures", () => {
+  it("parses single lean", () => {
+    const f = parseModeFeatures("lean");
+    expect(f).toEqual({ lean: true, onDemand: false, waferFix: false });
+  });
+
+  it("parses single on-demand", () => {
+    const f = parseModeFeatures("on-demand");
+    expect(f).toEqual({ lean: false, onDemand: true, waferFix: false });
+  });
+
+  it("parses wafer-fix alone", () => {
+    const f = parseModeFeatures("wafer-fix");
+    expect(f).toEqual({ lean: false, onDemand: false, waferFix: true });
+  });
+
+  it("parses lean,wafer-fix combo", () => {
+    const f = parseModeFeatures("lean,wafer-fix");
+    expect(f).toEqual({ lean: true, onDemand: false, waferFix: true });
+  });
+
+  it("parses on-demand,wafer-fix combo", () => {
+    const f = parseModeFeatures("on-demand,wafer-fix");
+    expect(f).toEqual({ lean: false, onDemand: true, waferFix: true });
+  });
+
+  it("parses lean,on-demand,wafer-fix triple combo", () => {
+    const f = parseModeFeatures("lean,on-demand,wafer-fix");
+    expect(f).toEqual({ lean: true, onDemand: true, waferFix: true });
+  });
+
+  it("legacy lean-on-demand sets both lean and onDemand", () => {
+    const f = parseModeFeatures("lean-on-demand");
+    expect(f).toEqual({ lean: true, onDemand: true, waferFix: false });
+  });
+
+  it("observe returns all false", () => {
+    const f = parseModeFeatures("observe");
+    expect(f).toEqual({ lean: false, onDemand: false, waferFix: false });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// estimateInputTokens
+// ---------------------------------------------------------------------------
+describe("estimateInputTokens", () => {
+  it("divides bytes by 4 and rounds", () => {
+    expect(estimateInputTokens(280000)).toBe(70000);
+    expect(estimateInputTokens(301)).toBe(75);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WaferFixPatcher
+// ---------------------------------------------------------------------------
+describe("WaferFixPatcher", () => {
+  const MSG_START =
+    'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":0,"output_tokens":0}}}\n\n';
+  const CONTENT_BLOCK =
+    'event: content_block_start\ndata: {"type":"content_block_start","index":0}\n\n';
+
+  it("patches input_tokens:0 when full first event arrives in one chunk", () => {
+    const patcher = new WaferFixPatcher(71000);
+    const result = patcher.process(Buffer.from(MSG_START + CONTENT_BLOCK));
+    const text = Buffer.concat(result).toString("utf-8");
+    expect(text).toContain('"input_tokens":71000');
+    expect(text).not.toContain('"input_tokens":0');
+    expect(text).toContain(CONTENT_BLOCK);
+  });
+
+  it("buffers partial first event, patches when boundary arrives", () => {
+    const patcher = new WaferFixPatcher(50000);
+    const half = Math.floor(MSG_START.length / 2);
+    const first = patcher.process(Buffer.from(MSG_START.slice(0, half)));
+    expect(first).toHaveLength(0); // still buffering
+    const second = patcher.process(Buffer.from(MSG_START.slice(half) + CONTENT_BLOCK));
+    const text = Buffer.concat(second).toString("utf-8");
+    expect(text).toContain('"input_tokens":50000');
+    expect(text).toContain(CONTENT_BLOCK);
+  });
+
+  it("passes subsequent chunks through without buffering", () => {
+    const patcher = new WaferFixPatcher(1000);
+    patcher.process(Buffer.from(MSG_START)); // prime it
+    const chunk2 = Buffer.from(CONTENT_BLOCK);
+    const out = patcher.process(chunk2);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toBe(chunk2); // exact same buffer reference
+  });
+
+  it("does not patch when input_tokens is non-zero", () => {
+    const patcher = new WaferFixPatcher(99999);
+    const withRealTokens = MSG_START.replace('"input_tokens":0', '"input_tokens":42000');
+    const result = patcher.process(Buffer.from(withRealTokens));
+    const text = Buffer.concat(result).toString("utf-8");
+    expect(text).toContain('"input_tokens":42000');
+    expect(text).not.toContain('"input_tokens":99999');
+  });
+
+  it("flush returns remaining buffer if stream ends before \\n\\n", () => {
+    const patcher = new WaferFixPatcher(1000);
+    const partial = "event: message_start\ndata: {partial";
+    patcher.process(Buffer.from(partial));
+    const flushed = patcher.flush();
+    expect(Buffer.concat(flushed).toString("utf-8")).toBe(partial);
+    expect(patcher.flush()).toHaveLength(0); // empty after flush
   });
 });

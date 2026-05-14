@@ -29,8 +29,16 @@ import {
 // Tool mode infrastructure
 // ---------------------------------------------------------------------------
 
-export type ToolMode = "observe" | "lean" | "on-demand" | "lean-on-demand";
+// Comma-separated feature string: "lean", "on-demand", "wafer-fix", or combos
+// Legacy compound: "lean-on-demand" = "lean,on-demand"
+export type ToolMode = string;
 
+// (mode parsing, WaferFixPatcher, and estimateInputTokens live in filters.ts)
+import {
+  parseModeFeatures,
+  WaferFixPatcher,
+  estimateInputTokens,
+} from "./filters.js";
 
 // (filter logic lives in filters.ts — imported above)
 
@@ -310,10 +318,11 @@ export async function startProxy(
   const upstreamOverride =
     options.upstream || process.env.LLM_INSPECTOR_UPSTREAM || undefined;
   const verbose = options.verbose ?? true;
-  const toolMode: ToolMode =
+  const toolModeStr: string =
     options.toolMode ||
-    (process.env.LLM_INSPECTOR_TOOL_MODE as ToolMode | undefined) ||
+    (process.env.LLM_INSPECTOR_TOOL_MODE as string | undefined) ||
     "observe";
+  const modes = parseModeFeatures(toolModeStr);
 
   const captureDir = await ensureCaptureDir();
 
@@ -409,7 +418,7 @@ export async function startProxy(
     let stubbedToolsMap = new Map<string, unknown>();
     let requestId = "";
 
-    if (toolMode === "on-demand" && method === "POST") {
+    if (modes.onDemand && !modes.lean && method === "POST") {
       const { modified, stubbedTools } = applyStubToolFilter(parsedBody);
       if (stubbedTools.size > 0) {
         stubbedToolsMap = stubbedTools;
@@ -431,7 +440,7 @@ export async function startProxy(
       }
     }
 
-    if (toolMode === "lean" && method === "POST") {
+    if (modes.lean && !modes.onDemand && method === "POST") {
       const { modified, stripped } = applyLeanToolFilter(parsedBody);
       if (stripped.length > 0) {
         strippedTools = stripped;
@@ -442,7 +451,7 @@ export async function startProxy(
       }
     }
 
-    if (toolMode === "lean-on-demand" && method === "POST") {
+    if (modes.lean && modes.onDemand && method === "POST") {
       const { modified, stripped, stubbedTools } = applyLeanOnDemandFilter(parsedBody);
       if (stripped.length > 0 || stubbedTools.size > 0) {
         strippedTools = stripped;
@@ -466,16 +475,23 @@ export async function startProxy(
       }
     }
 
+    // Create wafer-fix patcher if enabled (patches input_tokens:0 → estimated value)
+    const patcher = modes.waferFix
+      ? new WaferFixPatcher(estimateInputTokens(forwardBody.length))
+      : null;
+
     if (verbose) {
       const model = parsedBody.model || "unknown";
-      const note =
+      const toolNote =
         strippedTools.length > 0 && stubbedToolsMap.size > 0
-          ? ` [lean-on-demand: stripped ${strippedTools.length}, stubbed ${stubbedToolsMap.size}]`
+          ? ` [lean+on-demand: stripped ${strippedTools.length}, stubbed ${stubbedToolsMap.size}]`
           : strippedTools.length > 0
             ? ` [lean: stripped ${strippedTools.length} tools]`
             : stubbedToolsMap.size > 0
               ? ` [on-demand: stubbed ${stubbedToolsMap.size} tools]`
               : "";
+      const waferNote = patcher ? ` [wafer-fix: est ${estimateInputTokens(forwardBody.length)} tokens]` : "";
+      const note = toolNote + waferNote;
       console.log(
         `[llm-inspector] ${method} ${originalPath} -> ${upstream.href} (${model}, ${bodySize}B -> ${forwardBody.length}B)${note}`,
       );
@@ -514,11 +530,20 @@ export async function startProxy(
           const allChunks: Buffer[] = [];
 
           proxyRes.on("data", (chunk: Buffer) => {
-            allChunks.push(chunk);
-            captureRes.write(chunk);
+            const toWrite = patcher ? patcher.process(chunk) : [chunk];
+            for (const c of toWrite) {
+              allChunks.push(c);
+              captureRes.write(c);
+            }
           });
 
           proxyRes.on("end", async () => {
+            if (patcher) {
+              for (const c of patcher.flush()) {
+                allChunks.push(c);
+                captureRes.write(c);
+              }
+            }
             const fullText = Buffer.concat(allChunks).toString("utf-8");
             const detected = scanBufferedSSEForStubbedTools(fullText, stubbedNames);
             buf.sseChunks = allChunks.map((c) => c.toString("utf-8"));
@@ -592,10 +617,19 @@ export async function startProxy(
           // Normal SSE mode — stream + buffer for usage
           const chunks: Buffer[] = [];
           proxyRes.on("data", (chunk: Buffer) => {
-            chunks.push(chunk);
-            captureRes.write(chunk);
+            const toWrite = patcher ? patcher.process(chunk) : [chunk];
+            for (const c of toWrite) {
+              chunks.push(c);
+              captureRes.write(c);
+            }
           });
           proxyRes.on("end", () => {
+            if (patcher) {
+              for (const c of patcher.flush()) {
+                chunks.push(c);
+                captureRes.write(c);
+              }
+            }
             const fullBody = Buffer.concat(chunks).toString("utf-8");
             const usage = extractSSEUsage(fullBody);
 

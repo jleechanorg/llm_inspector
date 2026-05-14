@@ -1,3 +1,71 @@
+// ---------------------------------------------------------------------------
+// Mode parsing and wafer-fix SSE patcher
+// ---------------------------------------------------------------------------
+
+export interface ModeFeatures {
+  lean: boolean;
+  onDemand: boolean;
+  waferFix: boolean;
+}
+
+// Parse comma-separated mode string into feature flags.
+// Legacy compound "lean-on-demand" sets both lean and onDemand.
+export function parseModeFeatures(modeStr: string): ModeFeatures {
+  const parts = modeStr.split(",").map((s) => s.trim().toLowerCase());
+  return {
+    lean: parts.includes("lean") || parts.includes("lean-on-demand"),
+    onDemand: parts.includes("on-demand") || parts.includes("lean-on-demand"),
+    waferFix: parts.includes("wafer-fix"),
+  };
+}
+
+// ~4 bytes per token is a reasonable estimate for JSON-heavy API payloads
+export function estimateInputTokens(bodyBytes: number): number {
+  return Math.round(bodyBytes / 4);
+}
+
+// Patches "input_tokens":0 → estimated value in the first SSE message_start event.
+// Buffers chunks until the first \n\n boundary, then patches and flushes in one shot.
+// After the first event boundary is found, subsequent chunks pass through immediately.
+export class WaferFixPatcher {
+  private buffer = "";
+  private patched = false;
+
+  constructor(private estimatedTokens: number) {}
+
+  process(chunk: Buffer): Buffer[] {
+    if (this.patched) return [chunk];
+    this.buffer += chunk.toString("utf-8");
+    const boundary = this.buffer.indexOf("\n\n");
+    if (boundary !== -1) {
+      const firstEvent = this.buffer.slice(0, boundary + 2);
+      const remainder = this.buffer.slice(boundary + 2);
+      const patchedEvent = firstEvent.replace(
+        /"input_tokens"\s*:\s*0\b/,
+        `"input_tokens":${this.estimatedTokens}`,
+      );
+      this.patched = true;
+      this.buffer = "";
+      return [Buffer.from(patchedEvent + remainder, "utf-8")];
+    }
+    return [];
+  }
+
+  // Call at stream end to flush any buffered bytes (e.g. malformed response with no \n\n).
+  flush(): Buffer[] {
+    if (this.buffer.length > 0) {
+      const buf = Buffer.from(this.buffer, "utf-8");
+      this.buffer = "";
+      return [buf];
+    }
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tool removal and stub lists
+// ---------------------------------------------------------------------------
+
 export const LEAN_REMOVE_LIST = new Set([
   // Chrome browser automation (~29KB)
   "mcp__claude-in-chrome__computer",
