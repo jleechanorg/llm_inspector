@@ -18,136 +18,38 @@ import {
   redactHeaders,
   DEFAULT_PORT,
 } from "./utils.js";
+import {
+  STUB_SCHEMA_MAP,
+  applyLeanFilter,
+  applyOnDemandFilter,
+  applyLeanOnDemandFilter,
+} from "./filters.js";
 
 // ---------------------------------------------------------------------------
-// Tool mode infrastructure (preserved from original)
+// Tool mode infrastructure
 // ---------------------------------------------------------------------------
 
-export type ToolMode = "observe" | "lean" | "on-demand";
+// Comma-separated feature string: "lean", "on-demand", "wafer-fix", or combos
+// Legacy compound: "lean-on-demand" = "lean,on-demand"
+export type ToolMode = string;
 
-const LEAN_TOOLS = new Set([
-  "Bash", "Read", "Write", "Edit", "MultiEdit",
-  "Glob", "Grep", "WebFetch", "WebSearch",
-  "AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "NotebookEdit",
-  "mcp__context7__resolve-library-id", "mcp__context7__get-library-docs",
-]);
+// (mode parsing, WaferFixPatcher, and estimateInputTokens live in filters.ts)
+import {
+  parseModeFeatures,
+  WaferFixPatcher,
+  estimateInputTokens,
+} from "./filters.js";
 
-const HEAVY_TOOL_NAMES = [
-  "Agent",
-  "TeamCreate",
-  "TeamDelete",
-  "TaskCreate",
-  "TaskUpdate",
-  "TaskGet",
-  "TaskList",
-  "TaskOutput",
-  "TaskStop",
-  "SendMessage",
-  "CronCreate",
-  "CronDelete",
-  "CronList",
-  "EnterWorktree",
-  "ExitWorktree",
-  "Skill",
-  "RemoteTrigger",
-] as const;
+// (filter logic lives in filters.ts — imported above)
 
-type HeavyToolName = (typeof HEAVY_TOOL_NAMES)[number];
-
-function makeStubSchema(name: HeavyToolName): {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-} {
-  const descriptions: Record<HeavyToolName, string> = {
-    Agent: "Spawn an autonomous sub-agent to handle a task.",
-    TeamCreate: "Create a team of agents to coordinate on a shared goal.",
-    TeamDelete: "Delete a team and free its resources.",
-    TaskCreate: "Create a task in a team's task list.",
-    TaskUpdate: "Update a task's status or details.",
-    TaskGet: "Get details about a specific task.",
-    TaskList: "List tasks in a team's task list.",
-    TaskOutput: "Get the output of a completed task.",
-    TaskStop: "Stop a running task.",
-    SendMessage: "Send a message to an agent or team.",
-    CronCreate: "Schedule a prompt to run on a recurring cron schedule.",
-    CronDelete: "Delete a scheduled cron job.",
-    CronList: "List all scheduled cron jobs.",
-    EnterWorktree: "Enter a git worktree for isolated development.",
-    ExitWorktree: "Exit the current git worktree.",
-    Skill: "Invoke a named skill.",
-    RemoteTrigger: "Trigger a remote agent via webhook.",
-  };
-  return {
-    name,
-    description: descriptions[name],
-    inputSchema: { type: "object", properties: {}, required: [] },
-  };
+function applyStubToolFilter(body: Record<string, unknown>) {
+  return applyOnDemandFilter(body);
 }
 
-const STUB_SCHEMA_MAP = new Map<string, ReturnType<typeof makeStubSchema>>();
-for (const name of HEAVY_TOOL_NAMES) {
-  STUB_SCHEMA_MAP.set(name, makeStubSchema(name));
+function applyLeanToolFilter(body: Record<string, unknown>) {
+  return applyLeanFilter(body);
 }
 
-function applyStubToolFilter(
-  body: Record<string, unknown>,
-): {
-  modified: Record<string, unknown>;
-  stubbedTools: Map<string, unknown>;
-} {
-  const tools = body.tools;
-  if (!Array.isArray(tools) || tools.length === 0) {
-    return { modified: body, stubbedTools: new Map() };
-  }
-
-  const kept: unknown[] = [];
-  const stubbedTools = new Map<string, unknown>();
-
-  for (const tool of tools) {
-    const t = tool as Record<string, unknown>;
-    const name = typeof t.name === "string" ? t.name : "";
-    const stub = STUB_SCHEMA_MAP.get(name);
-    if (stub) {
-      kept.push(stub);
-      stubbedTools.set(name, tool);
-    } else {
-      kept.push(tool);
-    }
-  }
-
-  return {
-    modified: { ...body, tools: kept },
-    stubbedTools,
-  };
-}
-
-function applyLeanToolFilter(
-  body: Record<string, unknown>,
-): { modified: Record<string, unknown>; stripped: string[] } {
-  const tools = body.tools;
-  if (!Array.isArray(tools) || tools.length === 0) {
-    return { modified: body, stripped: [] };
-  }
-
-  const kept: unknown[] = [];
-  const stripped: string[] = [];
-
-  for (const tool of tools) {
-    const t = tool as Record<string, unknown>;
-    const name = typeof t.name === "string" ? t.name : "";
-    if (name.startsWith("mcp__") || LEAN_TOOLS.has(name)) {
-      kept.push(tool);
-    } else {
-      stripped.push(name);
-    }
-  }
-
-  if (stripped.length === 0) {
-    return { modified: body, stripped: [] };
-  }
-  return { modified: { ...body, tools: kept }, stripped };
-}
 
 // ---------------------------------------------------------------------------
 // On-demand re-issue infrastructure
@@ -416,10 +318,11 @@ export async function startProxy(
   const upstreamOverride =
     options.upstream || process.env.LLM_INSPECTOR_UPSTREAM || undefined;
   const verbose = options.verbose ?? true;
-  const toolMode: ToolMode =
+  const toolModeStr: string =
     options.toolMode ||
-    (process.env.LLM_INSPECTOR_TOOL_MODE as ToolMode | undefined) ||
+    (process.env.LLM_INSPECTOR_TOOL_MODE as string | undefined) ||
     "observe";
+  const modes = parseModeFeatures(toolModeStr);
 
   const captureDir = await ensureCaptureDir();
 
@@ -480,7 +383,7 @@ export async function startProxy(
       );
       proxyReq.on("error", (err) => {
         console.error(`[llm-inspector] Proxy error: ${err.message}`);
-        res.status(502).end();
+        res.writeHead(502).end();
       });
       proxyReq.end();
       return;
@@ -515,7 +418,7 @@ export async function startProxy(
     let stubbedToolsMap = new Map<string, unknown>();
     let requestId = "";
 
-    if (toolMode === "on-demand" && method === "POST") {
+    if (modes.onDemand && !modes.lean && method === "POST") {
       const { modified, stubbedTools } = applyStubToolFilter(parsedBody);
       if (stubbedTools.size > 0) {
         stubbedToolsMap = stubbedTools;
@@ -537,7 +440,7 @@ export async function startProxy(
       }
     }
 
-    if (toolMode === "lean" && method === "POST") {
+    if (modes.lean && !modes.onDemand && method === "POST") {
       const { modified, stripped } = applyLeanToolFilter(parsedBody);
       if (stripped.length > 0) {
         strippedTools = stripped;
@@ -548,14 +451,47 @@ export async function startProxy(
       }
     }
 
+    if (modes.lean && modes.onDemand && method === "POST") {
+      const { modified, stripped, stubbedTools } = applyLeanOnDemandFilter(parsedBody);
+      if (stripped.length > 0 || stubbedTools.size > 0) {
+        strippedTools = stripped;
+        if (stubbedTools.size > 0) {
+          stubbedToolsMap = stubbedTools;
+          requestId = extractRequestId(parsedBody);
+          requestBuffers.set(requestId, {
+            originalBody: modified,
+            originalRawBody: rawRequestBody,
+            stubbedTools: stubbedToolsMap,
+            sseChunks: [],
+            detectedStubbedTools: new Set(),
+            reIssuing: false,
+            stubbedForwarded: false,
+          });
+        }
+        const newBodyStr = JSON.stringify(modified);
+        forwardBody = Buffer.from(newBodyStr, "utf-8");
+        captured.body = modified as CapturedRequest["body"];
+        captured.bodySize = forwardBody.length;
+      }
+    }
+
+    // Create wafer-fix patcher if enabled (patches input_tokens:0 → estimated value)
+    const patcher = modes.waferFix
+      ? new WaferFixPatcher(estimateInputTokens(forwardBody.length))
+      : null;
+
     if (verbose) {
       const model = parsedBody.model || "unknown";
-      const note =
-        strippedTools.length > 0
-          ? ` [lean: stripped ${strippedTools.length} tools]`
-          : stubbedToolsMap.size > 0
-            ? ` [on-demand: stubbed ${stubbedToolsMap.size} tools]`
-            : "";
+      const toolNote =
+        strippedTools.length > 0 && stubbedToolsMap.size > 0
+          ? ` [lean+on-demand: stripped ${strippedTools.length}, stubbed ${stubbedToolsMap.size}]`
+          : strippedTools.length > 0
+            ? ` [lean: stripped ${strippedTools.length} tools]`
+            : stubbedToolsMap.size > 0
+              ? ` [on-demand: stubbed ${stubbedToolsMap.size} tools]`
+              : "";
+      const waferNote = patcher ? ` [wafer-fix: est ${estimateInputTokens(forwardBody.length)} tokens]` : "";
+      const note = toolNote + waferNote;
       console.log(
         `[llm-inspector] ${method} ${originalPath} -> ${upstream.href} (${model}, ${bodySize}B -> ${forwardBody.length}B)${note}`,
       );
@@ -594,11 +530,20 @@ export async function startProxy(
           const allChunks: Buffer[] = [];
 
           proxyRes.on("data", (chunk: Buffer) => {
-            allChunks.push(chunk);
-            captureRes.write(chunk);
+            const toWrite = patcher ? patcher.process(chunk) : [chunk];
+            for (const c of toWrite) {
+              allChunks.push(c);
+              captureRes.write(c);
+            }
           });
 
           proxyRes.on("end", async () => {
+            if (patcher) {
+              for (const c of patcher.flush()) {
+                allChunks.push(c);
+                captureRes.write(c);
+              }
+            }
             const fullText = Buffer.concat(allChunks).toString("utf-8");
             const detected = scanBufferedSSEForStubbedTools(fullText, stubbedNames);
             buf.sseChunks = allChunks.map((c) => c.toString("utf-8"));
@@ -672,10 +617,19 @@ export async function startProxy(
           // Normal SSE mode — stream + buffer for usage
           const chunks: Buffer[] = [];
           proxyRes.on("data", (chunk: Buffer) => {
-            chunks.push(chunk);
-            captureRes.write(chunk);
+            const toWrite = patcher ? patcher.process(chunk) : [chunk];
+            for (const c of toWrite) {
+              chunks.push(c);
+              captureRes.write(c);
+            }
           });
           proxyRes.on("end", () => {
+            if (patcher) {
+              for (const c of patcher.flush()) {
+                chunks.push(c);
+                captureRes.write(c);
+              }
+            }
             const fullBody = Buffer.concat(chunks).toString("utf-8");
             const usage = extractSSEUsage(fullBody);
 
@@ -742,7 +696,7 @@ export async function startProxy(
       captured.response = { status: 502 };
       captured.request_raw = rawHttpRequest;
       saveCapture(captured, captureDir).catch(() => {});
-      res.status(502).end();
+      res.writeHead(502).end();
     });
 
     proxyReq.write(forwardBody);

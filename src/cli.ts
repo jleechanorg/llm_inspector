@@ -47,7 +47,7 @@ program
   .option("--foreground", "Run in foreground (don't detach)")
   .option(
     "--tool-mode <mode>",
-    "observe (capture only), lean (strip heavy built-ins), or on-demand (stub schemas + re-issue on first heavy-tool use)",
+    "Comma-separated features: observe (default), lean, on-demand, wafer-fix. E.g. --tool-mode lean,wafer-fix",
     "observe",
   )
   .action(async (opts) => {
@@ -139,12 +139,13 @@ program
     // Give it a moment to bind the port
     await new Promise((resolve) => setTimeout(resolve, 500));
 
-    const toolModeNote =
-      opts.toolMode === "lean"
-        ? " [lean: Agent/Team*/Task* stripped ~20K tokens/turn]"
-        : opts.toolMode === "on-demand"
-          ? " [on-demand: stubs + re-issue on first heavy-tool use, ~97% upfront reduction]"
-          : " [observe: capture only, no modification]";
+    const modeStr: string = opts.toolMode || "observe";
+    const modeParts = modeStr.split(",").map((s: string) => s.trim());
+    const modeNotes: string[] = [];
+    if (modeParts.some((p: string) => p === "lean" || p === "lean-on-demand")) modeNotes.push("lean: MCP chrome tools stripped ~29KB/turn");
+    if (modeParts.some((p: string) => p === "on-demand" || p === "lean-on-demand")) modeNotes.push("on-demand: heavy tools stubbed, re-issued on use");
+    if (modeParts.includes("wafer-fix")) modeNotes.push("wafer-fix: input_tokens:0 patched with byte estimate");
+    const toolModeNote = modeNotes.length > 0 ? ` [${modeNotes.join(" | ")}]` : " [observe: capture only]";
     console.log(`Capture proxy started on port ${port} (PID ${child.pid}).${toolModeNote}`);
     console.log("Chain: your tool → llm-inspector :9000 (capture) → ccproxy :8000 (OAuth) → Anthropic");
     console.log("");
