@@ -18,136 +18,30 @@ import {
   redactHeaders,
   DEFAULT_PORT,
 } from "./utils.js";
+import {
+  STUB_SCHEMA_MAP,
+  applyLeanFilter,
+  applyOnDemandFilter,
+  applyLeanOnDemandFilter,
+} from "./filters.js";
 
 // ---------------------------------------------------------------------------
-// Tool mode infrastructure (preserved from original)
+// Tool mode infrastructure
 // ---------------------------------------------------------------------------
 
-export type ToolMode = "observe" | "lean" | "on-demand";
+export type ToolMode = "observe" | "lean" | "on-demand" | "lean-on-demand";
 
-const LEAN_TOOLS = new Set([
-  "Bash", "Read", "Write", "Edit", "MultiEdit",
-  "Glob", "Grep", "WebFetch", "WebSearch",
-  "AskUserQuestion", "EnterPlanMode", "ExitPlanMode", "NotebookEdit",
-  "mcp__context7__resolve-library-id", "mcp__context7__get-library-docs",
-]);
 
-const HEAVY_TOOL_NAMES = [
-  "Agent",
-  "TeamCreate",
-  "TeamDelete",
-  "TaskCreate",
-  "TaskUpdate",
-  "TaskGet",
-  "TaskList",
-  "TaskOutput",
-  "TaskStop",
-  "SendMessage",
-  "CronCreate",
-  "CronDelete",
-  "CronList",
-  "EnterWorktree",
-  "ExitWorktree",
-  "Skill",
-  "RemoteTrigger",
-] as const;
+// (filter logic lives in filters.ts — imported above)
 
-type HeavyToolName = (typeof HEAVY_TOOL_NAMES)[number];
-
-function makeStubSchema(name: HeavyToolName): {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-} {
-  const descriptions: Record<HeavyToolName, string> = {
-    Agent: "Spawn an autonomous sub-agent to handle a task.",
-    TeamCreate: "Create a team of agents to coordinate on a shared goal.",
-    TeamDelete: "Delete a team and free its resources.",
-    TaskCreate: "Create a task in a team's task list.",
-    TaskUpdate: "Update a task's status or details.",
-    TaskGet: "Get details about a specific task.",
-    TaskList: "List tasks in a team's task list.",
-    TaskOutput: "Get the output of a completed task.",
-    TaskStop: "Stop a running task.",
-    SendMessage: "Send a message to an agent or team.",
-    CronCreate: "Schedule a prompt to run on a recurring cron schedule.",
-    CronDelete: "Delete a scheduled cron job.",
-    CronList: "List all scheduled cron jobs.",
-    EnterWorktree: "Enter a git worktree for isolated development.",
-    ExitWorktree: "Exit the current git worktree.",
-    Skill: "Invoke a named skill.",
-    RemoteTrigger: "Trigger a remote agent via webhook.",
-  };
-  return {
-    name,
-    description: descriptions[name],
-    inputSchema: { type: "object", properties: {}, required: [] },
-  };
+function applyStubToolFilter(body: Record<string, unknown>) {
+  return applyOnDemandFilter(body);
 }
 
-const STUB_SCHEMA_MAP = new Map<string, ReturnType<typeof makeStubSchema>>();
-for (const name of HEAVY_TOOL_NAMES) {
-  STUB_SCHEMA_MAP.set(name, makeStubSchema(name));
+function applyLeanToolFilter(body: Record<string, unknown>) {
+  return applyLeanFilter(body);
 }
 
-function applyStubToolFilter(
-  body: Record<string, unknown>,
-): {
-  modified: Record<string, unknown>;
-  stubbedTools: Map<string, unknown>;
-} {
-  const tools = body.tools;
-  if (!Array.isArray(tools) || tools.length === 0) {
-    return { modified: body, stubbedTools: new Map() };
-  }
-
-  const kept: unknown[] = [];
-  const stubbedTools = new Map<string, unknown>();
-
-  for (const tool of tools) {
-    const t = tool as Record<string, unknown>;
-    const name = typeof t.name === "string" ? t.name : "";
-    const stub = STUB_SCHEMA_MAP.get(name);
-    if (stub) {
-      kept.push(stub);
-      stubbedTools.set(name, tool);
-    } else {
-      kept.push(tool);
-    }
-  }
-
-  return {
-    modified: { ...body, tools: kept },
-    stubbedTools,
-  };
-}
-
-function applyLeanToolFilter(
-  body: Record<string, unknown>,
-): { modified: Record<string, unknown>; stripped: string[] } {
-  const tools = body.tools;
-  if (!Array.isArray(tools) || tools.length === 0) {
-    return { modified: body, stripped: [] };
-  }
-
-  const kept: unknown[] = [];
-  const stripped: string[] = [];
-
-  for (const tool of tools) {
-    const t = tool as Record<string, unknown>;
-    const name = typeof t.name === "string" ? t.name : "";
-    if (name.startsWith("mcp__") || LEAN_TOOLS.has(name)) {
-      kept.push(tool);
-    } else {
-      stripped.push(name);
-    }
-  }
-
-  if (stripped.length === 0) {
-    return { modified: body, stripped: [] };
-  }
-  return { modified: { ...body, tools: kept }, stripped };
-}
 
 // ---------------------------------------------------------------------------
 // On-demand re-issue infrastructure
@@ -480,7 +374,7 @@ export async function startProxy(
       );
       proxyReq.on("error", (err) => {
         console.error(`[llm-inspector] Proxy error: ${err.message}`);
-        res.status(502).end();
+        res.writeHead(502).end();
       });
       proxyReq.end();
       return;
@@ -548,14 +442,40 @@ export async function startProxy(
       }
     }
 
+    if (toolMode === "lean-on-demand" && method === "POST") {
+      const { modified, stripped, stubbedTools } = applyLeanOnDemandFilter(parsedBody);
+      if (stripped.length > 0 || stubbedTools.size > 0) {
+        strippedTools = stripped;
+        if (stubbedTools.size > 0) {
+          stubbedToolsMap = stubbedTools;
+          requestId = extractRequestId(parsedBody);
+          requestBuffers.set(requestId, {
+            originalBody: parsedBody,
+            originalRawBody: rawRequestBody,
+            stubbedTools: stubbedToolsMap,
+            sseChunks: [],
+            detectedStubbedTools: new Set(),
+            reIssuing: false,
+            stubbedForwarded: false,
+          });
+        }
+        const newBodyStr = JSON.stringify(modified);
+        forwardBody = Buffer.from(newBodyStr, "utf-8");
+        captured.body = modified as CapturedRequest["body"];
+        captured.bodySize = forwardBody.length;
+      }
+    }
+
     if (verbose) {
       const model = parsedBody.model || "unknown";
       const note =
-        strippedTools.length > 0
-          ? ` [lean: stripped ${strippedTools.length} tools]`
-          : stubbedToolsMap.size > 0
-            ? ` [on-demand: stubbed ${stubbedToolsMap.size} tools]`
-            : "";
+        strippedTools.length > 0 && stubbedToolsMap.size > 0
+          ? ` [lean-on-demand: stripped ${strippedTools.length}, stubbed ${stubbedToolsMap.size}]`
+          : strippedTools.length > 0
+            ? ` [lean: stripped ${strippedTools.length} tools]`
+            : stubbedToolsMap.size > 0
+              ? ` [on-demand: stubbed ${stubbedToolsMap.size} tools]`
+              : "";
       console.log(
         `[llm-inspector] ${method} ${originalPath} -> ${upstream.href} (${model}, ${bodySize}B -> ${forwardBody.length}B)${note}`,
       );
@@ -742,7 +662,7 @@ export async function startProxy(
       captured.response = { status: 502 };
       captured.request_raw = rawHttpRequest;
       saveCapture(captured, captureDir).catch(() => {});
-      res.status(502).end();
+      res.writeHead(502).end();
     });
 
     proxyReq.write(forwardBody);
