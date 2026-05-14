@@ -450,7 +450,7 @@ export async function startProxy(
           stubbedToolsMap = stubbedTools;
           requestId = extractRequestId(parsedBody);
           requestBuffers.set(requestId, {
-            originalBody: parsedBody,
+            originalBody: modified,
             originalRawBody: rawRequestBody,
             stubbedTools: stubbedToolsMap,
             sseChunks: [],
