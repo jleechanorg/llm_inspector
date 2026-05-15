@@ -476,8 +476,10 @@ export async function startProxy(
     }
 
     // Create wafer-fix patcher if enabled (patches input_tokens:0 → estimated value)
+    // Use rawRequestBody (pre-lean) so the estimate matches Claude Code's internal
+    // context tracking, which sees the full body including tool schemas.
     const patcher = modes.waferFix
-      ? new WaferFixPatcher(estimateInputTokens(forwardBody.length))
+      ? new WaferFixPatcher(estimateInputTokens(rawRequestBody.length))
       : null;
 
     if (verbose) {
