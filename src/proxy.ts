@@ -23,6 +23,10 @@ import {
   applyLeanFilter,
   applyOnDemandFilter,
   applyLeanOnDemandFilter,
+  parseModeFeatures,
+  WaferFixPatcher,
+  ReadSizeGuard,
+  estimateInputTokens,
 } from "./filters.js";
 
 // ---------------------------------------------------------------------------
@@ -32,13 +36,6 @@ import {
 // Comma-separated feature string: "lean", "on-demand", "wafer-fix", or combos
 // Legacy compound: "lean-on-demand" = "lean,on-demand"
 export type ToolMode = string;
-
-// (mode parsing, WaferFixPatcher, and estimateInputTokens live in filters.ts)
-import {
-  parseModeFeatures,
-  WaferFixPatcher,
-  estimateInputTokens,
-} from "./filters.js";
 
 // (filter logic lives in filters.ts — imported above)
 
@@ -482,6 +479,31 @@ export async function startProxy(
       ? new WaferFixPatcher(estimateInputTokens(rawRequestBody.length))
       : null;
 
+    // Layer 3: Model-aware auto-lean — detect GLM models and force lean mode
+    // GLM-5.1 ignores file-read discipline, so stripping Chrome tools (~29KB)
+    // reduces the request payload it must process, preventing context bloat.
+    const modelStr = (parsedBody.model as string) || "";
+    const isGLMModel = /GLM/i.test(modelStr);
+    if (isGLMModel && !modes.lean && method === "POST") {
+      const { modified, stripped: autoStripped } = applyLeanFilter(parsedBody);
+      if (autoStripped.length > 0) {
+        strippedTools = autoStripped;
+        const newBodyStr = JSON.stringify(modified);
+        forwardBody = Buffer.from(newBodyStr, "utf-8");
+        captured.body = modified as CapturedRequest["body"];
+        captured.bodySize = forwardBody.length;
+        if (verbose) {
+          console.log(
+            `[llm-inspector] auto-lean: detected GLM model "${modelStr}", stripped ${autoStripped.length} tools`,
+          );
+        }
+      }
+    }
+
+    // Layer 2: ReadSizeGuard — truncates oversized tool_result content in SSE
+    // Activates when wafer-fix mode is on OR when the model is a GLM variant.
+    const readGuard = new ReadSizeGuard(modes.waferFix || isGLMModel);
+
     if (verbose) {
       const model = parsedBody.model || "unknown";
       const toolNote =
@@ -493,7 +515,8 @@ export async function startProxy(
               ? ` [on-demand: stubbed ${stubbedToolsMap.size} tools]`
               : "";
       const waferNote = patcher ? ` [wafer-fix: est ${estimateInputTokens(forwardBody.length)} tokens]` : "";
-      const note = toolNote + waferNote;
+      const guardNote = (modes.waferFix || isGLMModel) ? " [read-size-guard: on]" : "";
+      const note = toolNote + waferNote + guardNote;
       console.log(
         `[llm-inspector] ${method} ${originalPath} -> ${upstream.href} (${model}, ${bodySize}B -> ${forwardBody.length}B)${note}`,
       );
@@ -520,7 +543,7 @@ export async function startProxy(
         const captureRes = new RawCaptureResponse(res, (raw) => {
           rawResponse = raw;
         });
-        captureRes.setStatus(statusCode, proxyRes.reason || "OK");
+        captureRes.setStatus(statusCode, (proxyRes as unknown as { reason?: string }).reason || "OK");
         for (const [k, v] of Object.entries(proxyRes.headers)) {
           if (v !== undefined) captureRes.setHeader(k, v);
         }
@@ -532,8 +555,9 @@ export async function startProxy(
           const allChunks: Buffer[] = [];
 
           proxyRes.on("data", (chunk: Buffer) => {
-            const toWrite = patcher ? patcher.process(chunk) : [chunk];
-            for (const c of toWrite) {
+            let bufs = patcher ? patcher.process(chunk) : [chunk];
+            bufs = bufs.flatMap((b) => readGuard.process(b));
+            for (const c of bufs) {
               allChunks.push(c);
               captureRes.write(c);
             }
@@ -542,9 +566,16 @@ export async function startProxy(
           proxyRes.on("end", async () => {
             if (patcher) {
               for (const c of patcher.flush()) {
-                allChunks.push(c);
-                captureRes.write(c);
+                const guarded = readGuard.process(c);
+                for (const g of guarded) {
+                  allChunks.push(g);
+                  captureRes.write(g);
+                }
               }
+            }
+            for (const c of readGuard.flush()) {
+              allChunks.push(c);
+              captureRes.write(c);
             }
             const fullText = Buffer.concat(allChunks).toString("utf-8");
             const detected = scanBufferedSSEForStubbedTools(fullText, stubbedNames);
@@ -619,8 +650,9 @@ export async function startProxy(
           // Normal SSE mode — stream + buffer for usage
           const chunks: Buffer[] = [];
           proxyRes.on("data", (chunk: Buffer) => {
-            const toWrite = patcher ? patcher.process(chunk) : [chunk];
-            for (const c of toWrite) {
+            let bufs = patcher ? patcher.process(chunk) : [chunk];
+            bufs = bufs.flatMap((b) => readGuard.process(b));
+            for (const c of bufs) {
               chunks.push(c);
               captureRes.write(c);
             }
@@ -628,9 +660,16 @@ export async function startProxy(
           proxyRes.on("end", () => {
             if (patcher) {
               for (const c of patcher.flush()) {
-                chunks.push(c);
-                captureRes.write(c);
+                const guarded = readGuard.process(c);
+                for (const g of guarded) {
+                  chunks.push(g);
+                  captureRes.write(g);
+                }
               }
+            }
+            for (const c of readGuard.flush()) {
+              chunks.push(c);
+              captureRes.write(c);
             }
             const fullBody = Buffer.concat(chunks).toString("utf-8");
             const usage = extractSSEUsage(fullBody);
@@ -741,9 +780,11 @@ async function saveCapture(
 
   await writeFile(filepath, JSON.stringify(captured, null, 2));
 
-  const summary: Record<string, number> = {};
+  const summary: Record<string, number | string> = {};
   if (captured.body) {
     const body = captured.body as Record<string, unknown>;
+    if (body.model) summary["model"] = body.model as string;
+    if (/GLM/i.test(String(body.model || ""))) summary["session_type"] = "wafer";
     if (body.system) {
       const sysStr =
         typeof body.system === "string"
@@ -755,9 +796,9 @@ async function saveCapture(
       let builtinBytes = 0;
       let mcpBytes = 0;
       for (const tool of body.tools) {
-        const size = Buffer.byteLength(JSON.stringify(tool), "utf-8");
-        if (typeof (tool as Record<string, unknown>).name === "string" &&
-            (tool as Record<string, unknown>).name.toString().startsWith("mcp__")) {
+        const t = tool as Record<string, unknown>;
+        const size = Buffer.byteLength(JSON.stringify(t), "utf-8");
+        if (typeof t.name === "string" && t.name.startsWith("mcp__")) {
           mcpBytes += size;
         } else {
           builtinBytes += size;

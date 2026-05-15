@@ -8,6 +8,7 @@ import {
   parseModeFeatures,
   estimateInputTokens,
   WaferFixPatcher,
+  ReadSizeGuard,
 } from "./filters.js";
 
 const chromeTool = { name: "mcp__claude-in-chrome__navigate", description: "nav", input_schema: {} };
@@ -243,5 +244,78 @@ describe("WaferFixPatcher", () => {
     const flushed = patcher.flush();
     expect(Buffer.concat(flushed).toString("utf-8")).toBe(partial);
     expect(patcher.flush()).toHaveLength(0); // empty after flush
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ReadSizeGuard
+// ---------------------------------------------------------------------------
+describe("ReadSizeGuard", () => {
+  const NOTICE = "[ReadSizeGuard: content truncated at 50KB";
+
+  function makeToolResultSSE(content: string): string {
+    const escaped = content
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, "\\n")
+      .replace(/\t/g, "\\t");
+    return `data: {"type":"tool_result","content":"${escaped}"}\n\n`;
+  }
+
+  it("passes through when disabled", () => {
+    const guard = new ReadSizeGuard(false);
+    const chunk = Buffer.from(makeToolResultSSE("x".repeat(60000)));
+    const result = guard.process(chunk);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toBe(chunk);
+  });
+
+  it("passes through chunks without tool_result", () => {
+    const guard = new ReadSizeGuard(true);
+    const chunk = Buffer.from('data: {"type":"text","text":"hello"}\n\n');
+    const result = guard.process(chunk);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toBe(chunk);
+  });
+
+  it("passes through small tool_result content under 50KB", () => {
+    const guard = new ReadSizeGuard(true);
+    const smallContent = "x".repeat(1000);
+    const chunk = Buffer.from(makeToolResultSSE(smallContent));
+    const result = guard.process(chunk);
+    const text = Buffer.concat(result).toString("utf-8");
+    expect(text).toContain(smallContent);
+    expect(text).not.toContain(NOTICE);
+  });
+
+  it("truncates tool_result content exceeding 50KB", () => {
+    const guard = new ReadSizeGuard(true);
+    const bigContent = "A".repeat(60000);
+    const chunk = Buffer.from(makeToolResultSSE(bigContent));
+    const result = guard.process(chunk);
+    const text = Buffer.concat(result).toString("utf-8");
+    expect(text).toContain(NOTICE);
+    expect(text).not.toContain("A".repeat(60000));
+  });
+
+  it("truncates streaming delta blocks exceeding 50KB", () => {
+    const guard = new ReadSizeGuard(true);
+    const bigText = "B".repeat(55000);
+    const escaped = bigText
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"')
+      .replace(/\n/g, "\\n")
+      .replace(/\t/g, "\\t");
+    const chunk = Buffer.from(
+      `data: {"type":"content_block_delta","delta":{"text":"${escaped}"}}\n\n`,
+    );
+    const result = guard.process(chunk);
+    const text = Buffer.concat(result).toString("utf-8");
+    expect(text).toContain(NOTICE);
+  });
+
+  it("flush returns empty (stateless guard)", () => {
+    const guard = new ReadSizeGuard(true);
+    expect(guard.flush()).toHaveLength(0);
   });
 });

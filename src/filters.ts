@@ -63,6 +63,64 @@ export class WaferFixPatcher {
 }
 
 // ---------------------------------------------------------------------------
+// ReadSizeGuard — truncates oversized tool_result content in SSE responses
+// ---------------------------------------------------------------------------
+
+// Truncation threshold for tool_result content (50KB)
+const READ_SIZE_GUARD_BYTES = 50_000;
+
+const TRUNCATION_NOTICE =
+  "\n\n[ReadSizeGuard: content truncated at 50KB. Use offset/limit or grep -n to read specific sections.]";
+
+export class ReadSizeGuard {
+  constructor(private enabled: boolean) {}
+
+  process(chunk: Buffer): Buffer[] {
+    if (!this.enabled) return [chunk];
+    const text = chunk.toString("utf-8");
+    // Only process data: lines that contain tool_result or large delta blocks
+    if (!text.includes("tool_result") && !text.includes("content_block_delta")) return [chunk];
+
+    let modified = text;
+    // Match tool_result content blocks that exceed the byte threshold
+    // SSE format: data: {"type":"content_block_delta","delta":{"text":"..."}}
+    // or data: {"type":"message","content":[{"type":"tool_result","content":"..."}]}
+    let didTruncate = false;
+    modified = modified.replace(
+      /("type"\s*:\s*"tool_result"[^}]*"content"\s*:\s*")((?:[^"\\]|\\.)*)(")/gs,
+      (match, prefix, content, suffix) => {
+        const decoded = content.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+        if (Buffer.byteLength(decoded, "utf-8") <= READ_SIZE_GUARD_BYTES) return match;
+        const truncated = decoded.slice(0, READ_SIZE_GUARD_BYTES) + TRUNCATION_NOTICE;
+        const reEncoded = truncated.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\t/g, "\\t");
+        didTruncate = true;
+        return prefix + reEncoded + suffix;
+      },
+    );
+
+    // Also handle streaming delta blocks with tool_result text
+    modified = modified.replace(
+      /("type"\s*:\s*"content_block_delta"[^}]*"text"\s*:\s*")((?:[^"\\]|\\.){50000,})(")/gs,
+      (match, prefix, content, suffix) => {
+        const decoded = content.replace(/\\n/g, "\n").replace(/\\t/g, "\t").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+        if (Buffer.byteLength(decoded, "utf-8") <= READ_SIZE_GUARD_BYTES) return match;
+        const truncated = decoded.slice(0, READ_SIZE_GUARD_BYTES) + TRUNCATION_NOTICE;
+        const reEncoded = truncated.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n").replace(/\t/g, "\\t");
+        didTruncate = true;
+        return prefix + reEncoded + suffix;
+      },
+    );
+
+    if (didTruncate) return [Buffer.from(modified, "utf-8")];
+    return [chunk];
+  }
+
+  flush(): Buffer[] {
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Tool removal and stub lists
 // ---------------------------------------------------------------------------
 
