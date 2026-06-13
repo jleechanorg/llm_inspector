@@ -125,7 +125,7 @@ export class ReadSizeGuard {
 // ---------------------------------------------------------------------------
 
 export const LEAN_REMOVE_LIST = new Set([
-  // Chrome browser automation (~29KB)
+  // Chrome browser automation — all tools (~31KB total)
   "mcp__claude-in-chrome__computer",
   "mcp__claude-in-chrome__browser_batch",
   "mcp__claude-in-chrome__find",
@@ -146,10 +146,27 @@ export const LEAN_REMOVE_LIST = new Set([
   "mcp__claude-in-chrome__tabs_create_mcp",
   "mcp__claude-in-chrome__upload_image",
   "mcp__claude-in-chrome__file_upload",
+  "mcp__claude-in-chrome__list_connected_browsers",
+  "mcp__claude-in-chrome__select_browser",
   "mcp__plugin_superpowers-chrome_chrome__use_browser",
   // Google Drive OAuth (~1.5KB)
   "mcp__claude_ai_Google_Drive__authenticate",
   "mcp__claude_ai_Google_Drive__complete_authentication",
+  // iOS Simulator — never needed in non-mobile sessions (~9.9KB)
+  "mcp__ios-simulator-mcp__get_booted_sim_id",
+  "mcp__ios-simulator-mcp__install_app",
+  "mcp__ios-simulator-mcp__launch_app",
+  "mcp__ios-simulator-mcp__open_simulator",
+  "mcp__ios-simulator-mcp__record_video",
+  "mcp__ios-simulator-mcp__screenshot",
+  "mcp__ios-simulator-mcp__stop_recording",
+  "mcp__ios-simulator-mcp__ui_describe_all",
+  "mcp__ios-simulator-mcp__ui_describe_point",
+  "mcp__ios-simulator-mcp__ui_find_element",
+  "mcp__ios-simulator-mcp__ui_swipe",
+  "mcp__ios-simulator-mcp__ui_tap",
+  "mcp__ios-simulator-mcp__ui_type",
+  "mcp__ios-simulator-mcp__ui_view",
 ]);
 
 export const HEAVY_TOOL_NAMES = [
@@ -170,6 +187,8 @@ export const HEAVY_TOOL_NAMES = [
   "ExitWorktree",
   "Skill",
   "RemoteTrigger",
+  "DesignSync",
+  "Workflow",
 ] as const;
 
 export type HeavyToolName = (typeof HEAVY_TOOL_NAMES)[number];
@@ -192,6 +211,8 @@ const HEAVY_DESCRIPTIONS: Record<HeavyToolName, string> = {
   ExitWorktree: "Exit the current git worktree.",
   Skill: "Invoke a named skill.",
   RemoteTrigger: "Trigger a remote agent via webhook.",
+  DesignSync: "Read and update design-system projects through claude.ai.",
+  Workflow: "Execute a workflow script that orchestrates multiple subagents deterministically.",
 };
 
 export function makeStubSchema(name: HeavyToolName) {
