@@ -1,0 +1,22 @@
+{
+  "scenarios": [
+    {
+      "name": "Side-by-Side verification runner",
+      "pass": true,
+      "payload_savings_percent": "86.2",
+      "tool_savings_percent": "86.5",
+      "stream_duplication_prevented": true,
+      "reissue_success": true,
+      "errors": []
+    },
+    {
+      "name": "Real Claude Code turn integration (Fibonacci)",
+      "pass": true,
+      "real_callstack": true,
+      "upstream_connection_success": true,
+      "decompression_success": true,
+      "capture_saved": true,
+      "errors": []
+    }
+  ]
+}
