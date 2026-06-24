@@ -14,8 +14,18 @@
       "pass": true,
       "real_callstack": true,
       "upstream_connection_success": true,
-      "decompression_success": true,
+      "decompression_success": false,
       "capture_saved": true,
+      "notes": "Anthropic upstream returned uncompressed text/event-stream; decompression path was not active for this run",
+      "errors": []
+    },
+    {
+      "name": "In-process Vitest proxy integration and decompression test",
+      "pass": true,
+      "real_callstack": true,
+      "mock_upstream_gzips": true,
+      "decompression_success": true,
+      "accept_encoding_stripped": true,
       "errors": []
     }
   ]

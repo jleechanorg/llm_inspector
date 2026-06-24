@@ -27,4 +27,9 @@
 - Checked that:
   - The real CLI ran successfully, exited code 0, and printed correct fibonacci code.
   - The capture files were successfully generated in `~/.llm-inspector/captures/`.
-  - Inspected the JSON capture file to verify that the request and response gzip-compressed bytes were correctly intercepted, decoded, and logged.
+
+## Vitest Integration Decompression Test
+- Executed via `npx vitest run src/proxy.test.ts`.
+- Spins up a mock upstream listening on `127.0.0.1:19998` and a proxy listening on `127.0.0.1:19999` (upstream points to mock).
+- **Gzip Scenario**: Mock upstream compresses its SSE response using `gzipSync` from Node's built-in `zlib` library and sets `"content-encoding": "gzip"`.
+- **Assertion**: Verifies that the client receives the decompressed plain text payload (`"fibonacci stream chunk"`) and that the `"content-encoding"` header is removed, exercising the exact `createGunzip()` code path in `src/proxy.ts`.
