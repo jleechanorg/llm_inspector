@@ -23,7 +23,7 @@ export function getConfigDir(): string {
  * Returns ~/.llm-inspector/captures/ (creates if needed).
  */
 export function getCaptureDir(): string {
-  const dir = join(getConfigDir(), "captures");
+  const dir = process.env.LLM_INSPECTOR_CAPTURE_DIR || join(getConfigDir(), "captures");
   if (!existsSync(dir)) {
     // Sync create for simplicity — called once at startup
     import("node:fs").then((fs) => fs.mkdirSync(dir, { recursive: true }));
@@ -35,7 +35,7 @@ export function getCaptureDir(): string {
  * Ensure capture dir exists (async version).
  */
 export async function ensureCaptureDir(): Promise<string> {
-  const dir = join(getConfigDir(), "captures");
+  const dir = process.env.LLM_INSPECTOR_CAPTURE_DIR || join(getConfigDir(), "captures");
   if (!existsSync(dir)) {
     await mkdir(dir, { recursive: true });
   }
