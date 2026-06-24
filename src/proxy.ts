@@ -559,7 +559,6 @@ export async function startProxy(
             bufs = bufs.flatMap((b) => readGuard.process(b));
             for (const c of bufs) {
               allChunks.push(c);
-              captureRes.write(c);
             }
           });
 
@@ -569,13 +568,11 @@ export async function startProxy(
                 const guarded = readGuard.process(c);
                 for (const g of guarded) {
                   allChunks.push(g);
-                  captureRes.write(g);
                 }
               }
             }
             for (const c of readGuard.flush()) {
               allChunks.push(c);
-              captureRes.write(c);
             }
             const fullText = Buffer.concat(allChunks).toString("utf-8");
             const detected = scanBufferedSSEForStubbedTools(fullText, stubbedNames);
@@ -612,6 +609,10 @@ export async function startProxy(
                 } catch {
                   reIssuedUsage = extractSSEUsage(reIssuedBody);
                 }
+                
+                // Write the re-issued response back to the client!
+                captureRes.write(Buffer.from(reIssuedBody));
+
                 captured.response_raw = reIssuedBody;
                 captured.response = {
                   status: reIssuedStatus,
