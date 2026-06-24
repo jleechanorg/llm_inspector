@@ -301,11 +301,11 @@ export function analyzeRequest(captured: CapturedRequest): AnalysisResult {
   };
 }
 
-/**
- * Analyze all captures in a directory.
- */
-export async function analyzeCaptures(dir?: string): Promise<AnalysisResult[]> {
-  const requests = await loadCapturedRequests(dir);
+export async function analyzeCaptures(
+  dir?: string,
+  options?: { last?: number; sort?: string },
+): Promise<AnalysisResult[]> {
+  const requests = await loadCapturedRequests(dir, options);
   return requests.map(analyzeRequest);
 }
 
