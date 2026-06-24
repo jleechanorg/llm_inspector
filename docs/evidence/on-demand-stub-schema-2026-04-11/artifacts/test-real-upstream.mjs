@@ -12,7 +12,7 @@
 
 import { createServer } from "node:http";
 import { spawn, execSync } from "node:child_process";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -20,8 +20,12 @@ const PROXY_PORT = 19999;
 const UPSTREAM_PORT = 19998;
 const SCRIPT_DIR = fileURLToPath(new URL(".", import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "../../../../");
-const OUT_DIR = resolve(REPO_ROOT, "llm_inspector/docs/evidence/on-demand-stub-schema-2026-04-11");
-const CLI = resolve(REPO_ROOT, "llm_inspector/dist/cli.js");
+const OUT_DIR = existsSync(resolve(REPO_ROOT, "dist/cli.js"))
+  ? resolve(REPO_ROOT, "docs/evidence/on-demand-stub-schema-2026-04-11")
+  : resolve(REPO_ROOT, "llm_inspector/docs/evidence/on-demand-stub-schema-2026-04-11");
+const CLI = existsSync(resolve(REPO_ROOT, "dist/cli.js"))
+  ? resolve(REPO_ROOT, "dist/cli.js")
+  : resolve(REPO_ROOT, "llm_inspector/dist/cli.js");
 const ITERATIONS = 10;
 
 // Realistic Claude Code Agent tool schema — 1368 bytes
@@ -117,7 +121,7 @@ async function runSingleIteration(iter) {
         "--port", String(PROXY_PORT),
         "--upstream", `http://127.0.0.1:${UPSTREAM_PORT}`,
         "--tool-mode", "on-demand",
-      ], { stdio: "pipe" });
+      ], { stdio: "inherit" });
 
       await sleep(2500);
 

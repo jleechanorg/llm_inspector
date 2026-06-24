@@ -24,10 +24,10 @@
 
 | Metric | Value |
 |--------|-------|
-| Mean reduction | 84.9% |
+| Mean reduction | 81.9% |
 | Std dev | 0.0% |
-| Min | 84.9% |
-| Max | 84.9% |
+| Min | 81.9% |
+| Max | 81.9% |
 | Pass rate | 10/10 |
 
 ## Evidence Details
@@ -38,138 +38,138 @@
     "test": "real upstream stub substitution",
     "pass": true,
     "original_agent_bytes": 1368,
-    "stubbed_agent_bytes": 206,
-    "reduction_percent": "84.9",
+    "stubbed_agent_bytes": 247,
+    "reduction_percent": "81.9",
     "stub_description": "Spawn an autonomous sub-agent to handle a task.",
     "agent_stub_has_task_property": true,
     "bash_preserved": true,
-    "total_upstream_bytes": 552,
+    "total_upstream_bytes": 593,
     "total_original_bytes": 1714,
-    "total_reduction_percent": "67.8"
+    "total_reduction_percent": "65.4"
   },
   {
     "test": "real upstream stub substitution",
     "pass": true,
     "original_agent_bytes": 1368,
-    "stubbed_agent_bytes": 206,
-    "reduction_percent": "84.9",
+    "stubbed_agent_bytes": 247,
+    "reduction_percent": "81.9",
     "stub_description": "Spawn an autonomous sub-agent to handle a task.",
     "agent_stub_has_task_property": true,
     "bash_preserved": true,
-    "total_upstream_bytes": 552,
+    "total_upstream_bytes": 593,
     "total_original_bytes": 1714,
-    "total_reduction_percent": "67.8"
+    "total_reduction_percent": "65.4"
   },
   {
     "test": "real upstream stub substitution",
     "pass": true,
     "original_agent_bytes": 1368,
-    "stubbed_agent_bytes": 206,
-    "reduction_percent": "84.9",
+    "stubbed_agent_bytes": 247,
+    "reduction_percent": "81.9",
     "stub_description": "Spawn an autonomous sub-agent to handle a task.",
     "agent_stub_has_task_property": true,
     "bash_preserved": true,
-    "total_upstream_bytes": 552,
+    "total_upstream_bytes": 593,
     "total_original_bytes": 1714,
-    "total_reduction_percent": "67.8"
+    "total_reduction_percent": "65.4"
   },
   {
     "test": "real upstream stub substitution",
     "pass": true,
     "original_agent_bytes": 1368,
-    "stubbed_agent_bytes": 206,
-    "reduction_percent": "84.9",
+    "stubbed_agent_bytes": 247,
+    "reduction_percent": "81.9",
     "stub_description": "Spawn an autonomous sub-agent to handle a task.",
     "agent_stub_has_task_property": true,
     "bash_preserved": true,
-    "total_upstream_bytes": 552,
+    "total_upstream_bytes": 593,
     "total_original_bytes": 1714,
-    "total_reduction_percent": "67.8"
+    "total_reduction_percent": "65.4"
   },
   {
     "test": "real upstream stub substitution",
     "pass": true,
     "original_agent_bytes": 1368,
-    "stubbed_agent_bytes": 206,
-    "reduction_percent": "84.9",
+    "stubbed_agent_bytes": 247,
+    "reduction_percent": "81.9",
     "stub_description": "Spawn an autonomous sub-agent to handle a task.",
     "agent_stub_has_task_property": true,
     "bash_preserved": true,
-    "total_upstream_bytes": 552,
+    "total_upstream_bytes": 593,
     "total_original_bytes": 1714,
-    "total_reduction_percent": "67.8"
+    "total_reduction_percent": "65.4"
   },
   {
     "test": "real upstream stub substitution",
     "pass": true,
     "original_agent_bytes": 1368,
-    "stubbed_agent_bytes": 206,
-    "reduction_percent": "84.9",
+    "stubbed_agent_bytes": 247,
+    "reduction_percent": "81.9",
     "stub_description": "Spawn an autonomous sub-agent to handle a task.",
     "agent_stub_has_task_property": true,
     "bash_preserved": true,
-    "total_upstream_bytes": 552,
+    "total_upstream_bytes": 593,
     "total_original_bytes": 1714,
-    "total_reduction_percent": "67.8"
+    "total_reduction_percent": "65.4"
   },
   {
     "test": "real upstream stub substitution",
     "pass": true,
     "original_agent_bytes": 1368,
-    "stubbed_agent_bytes": 206,
-    "reduction_percent": "84.9",
+    "stubbed_agent_bytes": 247,
+    "reduction_percent": "81.9",
     "stub_description": "Spawn an autonomous sub-agent to handle a task.",
     "agent_stub_has_task_property": true,
     "bash_preserved": true,
-    "total_upstream_bytes": 552,
+    "total_upstream_bytes": 593,
     "total_original_bytes": 1714,
-    "total_reduction_percent": "67.8"
+    "total_reduction_percent": "65.4"
   },
   {
     "test": "real upstream stub substitution",
     "pass": true,
     "original_agent_bytes": 1368,
-    "stubbed_agent_bytes": 206,
-    "reduction_percent": "84.9",
+    "stubbed_agent_bytes": 247,
+    "reduction_percent": "81.9",
     "stub_description": "Spawn an autonomous sub-agent to handle a task.",
     "agent_stub_has_task_property": true,
     "bash_preserved": true,
-    "total_upstream_bytes": 552,
+    "total_upstream_bytes": 593,
     "total_original_bytes": 1714,
-    "total_reduction_percent": "67.8"
+    "total_reduction_percent": "65.4"
   },
   {
     "test": "real upstream stub substitution",
     "pass": true,
     "original_agent_bytes": 1368,
-    "stubbed_agent_bytes": 206,
-    "reduction_percent": "84.9",
+    "stubbed_agent_bytes": 247,
+    "reduction_percent": "81.9",
     "stub_description": "Spawn an autonomous sub-agent to handle a task.",
     "agent_stub_has_task_property": true,
     "bash_preserved": true,
-    "total_upstream_bytes": 552,
+    "total_upstream_bytes": 593,
     "total_original_bytes": 1714,
-    "total_reduction_percent": "67.8"
+    "total_reduction_percent": "65.4"
   },
   {
     "test": "real upstream stub substitution",
     "pass": true,
     "original_agent_bytes": 1368,
-    "stubbed_agent_bytes": 206,
-    "reduction_percent": "84.9",
+    "stubbed_agent_bytes": 247,
+    "reduction_percent": "81.9",
     "stub_description": "Spawn an autonomous sub-agent to handle a task.",
     "agent_stub_has_task_property": true,
     "bash_preserved": true,
-    "total_upstream_bytes": 552,
+    "total_upstream_bytes": 593,
     "total_original_bytes": 1714,
-    "total_reduction_percent": "67.8"
+    "total_reduction_percent": "65.4"
   }
 ]
 ```
 
 ## What This Evidence Proves
 
-- Proxy stubbed Agent schema in all 10 runs (mean 84.9% reduction: 1368B → 206B)
+- Proxy stubbed Agent schema in all 10 runs (mean 81.9% reduction: 1368B → 247B)
 - Bash tool preserved unchanged in all runs
 - Real HTTP request/response through the full proxy→upstream chain
 - Stub uses correct `input_schema` format with `task` property
@@ -184,7 +184,7 @@
 | Claim | Artifact | Notes |
 |-------|----------|-------|
 | Agent stubbed in all runs | `artifacts/run.json` | Parsed from real upstream bytes, N=10 |
-| Mean 84.9% reduction | `artifacts/run.json` | 1368B → 206B, N=10 |
+| Mean 81.9% reduction | `artifacts/run.json` | 1368B → 247B, N=10 |
 | Bash preserved in all runs | `artifacts/run.json` | bash_preserved: true for all runs |
 | Real HTTP through proxy | `artifacts/collection_log.txt` | Console output from test run |
 | Test script source | `artifacts/test-real-upstream.mjs` | Preserved raw artifact |
