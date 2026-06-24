@@ -7,6 +7,8 @@
 
 import http from "node:http";
 import https from "node:https";
+import { createGunzip } from "node:zlib";
+import type { Readable } from "node:stream";
 import { writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -73,6 +75,39 @@ function extractRequestId(body: Record<string, unknown>): string {
     return body.id;
   }
   return nextRequestId();
+}
+
+/**
+ * Build the headers sent upstream to the real API.
+ *
+ * Centralizes the three header-normalization rules that used to be open-coded
+ * at every call site:
+ *   1. Replace `host` with the upstream's host (never leak the inspector's port).
+ *   2. For methods that carry a body (POST/PUT/PATCH), set `content-length`
+ *      to the byte length of the body we are about to send. For methods
+ *      without a body, strip any incoming `content-length` so a downstream
+ *      proxy cannot read a stale value.
+ *   3. Strip `accept-encoding` and `transfer-encoding`. We always request
+ *      identity-encoded responses so we can capture raw bytes; the chunked
+ *      + content-length conflict from `transfer-encoding` is a known cause
+ *      of the response-side decompression bug.
+ */
+function buildForwardHeaders(
+  source: Record<string, string>,
+  forwardBody: Buffer,
+  options: { method: string; upstreamHost: string },
+): Record<string, string> {
+  const headers: Record<string, string> = { ...source };
+  headers["host"] = options.upstreamHost;
+  const method = options.method.toUpperCase();
+  if (method === "POST" || method === "PUT" || method === "PATCH") {
+    headers["content-length"] = String(forwardBody.length);
+  } else {
+    delete headers["content-length"];
+  }
+  delete headers["accept-encoding"];
+  delete headers["transfer-encoding"];
+  return headers;
 }
 
 function parseSSEForStubbedTools(
@@ -180,8 +215,10 @@ async function reIssueWithFullSchema(
   const fullBody = { ...originalBody, tools: fullTools };
   const bodyStr = JSON.stringify(fullBody);
   const bodyBuf = Buffer.from(bodyStr, "utf-8");
-  const headers = { ...forwardHeaders, "content-length": String(bodyBuf.length) };
-  delete headers["accept-encoding"];
+  const headers = buildForwardHeaders(forwardHeaders, bodyBuf, {
+    method: "POST",
+    upstreamHost: upstream.host,
+  });
 
   return new Promise((resolve, reject) => {
     const transport = upstream.protocol === "https:" ? https : http;
@@ -209,6 +246,18 @@ async function reIssueWithFullSchema(
 
 /**
  * Build a raw HTTP request string from method/path/headers/body.
+ *
+ * The body is captured as a base64-encoded marker line (`BODY_BASE64:<b64>`)
+ * rather than decoded as UTF-8. This preserves binary-safe fidelity for
+ * request bodies that may arrive gzip- or brotli-compressed — decoding those
+ * bytes as UTF-8 yields replacement-character mojibake and silently corrupts
+ * the captured payload.
+ *
+ * Schema of the returned string:
+ *   "<headers>\r\n\r\nBODY_BASE64:<base64-of-body>"
+ *
+ * Downstream readers split on the trailing `\r\n\r\nBODY_BASE64:` and
+ * base64-decode the suffix to recover the original raw body bytes.
  */
 function buildRawHttpRequest(
   method: string,
@@ -221,7 +270,7 @@ function buildRawHttpRequest(
     lines.push(`${k}: ${v}`);
   }
   lines.push("", "");
-  return lines.join("\r\n") + body.toString("utf-8");
+  return lines.join("\r\n") + "BODY_BASE64:" + body.toString("base64");
 }
 
 /**
@@ -367,10 +416,10 @@ export async function startProxy(
         console.log(`[llm-inspector] GET ${originalPath} -> ${upstream.href}`);
       }
       const transport = upstream.protocol === "https:" ? https : http;
-      const forwardHeaders = { ...reqHeaders };
-      forwardHeaders["host"] = upstream.host;
-      delete forwardHeaders["content-length"];
-      delete forwardHeaders["accept-encoding"];
+      const forwardHeaders = buildForwardHeaders(reqHeaders, Buffer.alloc(0), {
+        method: "GET",
+        upstreamHost: upstream.host,
+      });
 
       const proxyReq = transport.request(
         upstream.href,
@@ -525,10 +574,10 @@ export async function startProxy(
     }
 
     // Build forward headers
-    const forwardHeaders: Record<string, string> = { ...reqHeaders };
-    forwardHeaders["host"] = upstream.host;
-    forwardHeaders["content-length"] = String(forwardBody.length);
-    delete forwardHeaders["accept-encoding"];
+    const forwardHeaders = buildForwardHeaders(reqHeaders, forwardBody, {
+      method,
+      upstreamHost: upstream.host,
+    });
 
     const transport = upstream.protocol === "https:" ? https : http;
 
@@ -547,8 +596,62 @@ export async function startProxy(
           rawResponse = raw;
         });
         captureRes.setStatus(statusCode, (proxyRes as unknown as { reason?: string }).reason || "OK");
+
+        // Detect gzip on the response. Some upstreams ignore accept-encoding
+        // stripping on the request side and still send compressed bytes; without
+        // gunzip the client sees gzip-encoded bytes labelled content-encoding: gzip
+        // and explodes with "Decompression error: ZlibError" + retry storm.
+        // TODO(brotli): add `br` (and `deflate`) support here if upstreams start
+        // returning brotli; for now we only handle gzip.
+        const responseEncoding = (
+          proxyRes.headers["content-encoding"] as string | undefined
+        )?.toLowerCase();
+        const isGzip = responseEncoding === "gzip";
+
+        // Build the headers we forward to the client. When gzip, drop
+        // content-encoding (we'll decompress) and content-length (will differ).
+        // `transfer-encoding: chunked` (if present) is preserved automatically.
+        const forwardResponseHeaders: Record<string, string | string[]> = {};
         for (const [k, v] of Object.entries(proxyRes.headers)) {
-          if (v !== undefined) captureRes.setHeader(k, v);
+          if (v === undefined) continue;
+          if (isGzip && (k === "content-encoding" || k === "content-length")) {
+            continue;
+          }
+          forwardResponseHeaders[k] = v;
+        }
+        for (const [k, v] of Object.entries(forwardResponseHeaders)) {
+          captureRes.setHeader(k, v);
+        }
+
+        // The body source the three branches below will listen to. Defaults to
+        // proxyRes (passthrough); becomes the gunzip stream when we decompress.
+        let bodySource: Readable = proxyRes;
+        if (isGzip) {
+          const gunzip = createGunzip();
+          gunzip.on("error", (gzErr) => {
+            // Upstream claimed gzip but the bytes aren't actually gzip, or the
+            // stream was truncated. Mirror the proxyReq.on("error") 502 pattern
+            // so the client gets a clean failure instead of a hanging socket.
+            console.error(
+              `[llm-inspector] Gunzip error: ${gzErr.message}. Returning 502.`,
+            );
+            try {
+              captured.response = { status: 502 };
+              captured.request_raw = rawHttpRequest;
+              saveCapture(captured, captureDir).catch(() => {});
+            } catch {
+              /* ignore capture save errors during error path */
+            }
+            if (!res.headersSent) {
+              res.writeHead(502, { "content-type": "text/plain" }).end(
+                `Bad Gateway: response decompression failed: ${gzErr.message}`,
+              );
+            } else {
+              res.end();
+            }
+          });
+          proxyRes.pipe(gunzip);
+          bodySource = gunzip;
         }
 
         if (isStreaming && requestId && requestBuffers.has(requestId)) {
@@ -557,7 +660,7 @@ export async function startProxy(
           const stubbedNames = new Set([...buf.stubbedTools.keys()]);
           const allChunks: Buffer[] = [];
 
-          proxyRes.on("data", (chunk: Buffer) => {
+          bodySource.on("data", (chunk: Buffer) => {
             let bufs = patcher ? patcher.process(chunk) : [chunk];
             bufs = bufs.flatMap((b) => readGuard.process(b));
             for (const c of bufs) {
@@ -565,7 +668,7 @@ export async function startProxy(
             }
           });
 
-          proxyRes.on("end", async () => {
+          bodySource.on("end", async () => {
             if (patcher) {
               for (const c of patcher.flush()) {
                 const guarded = readGuard.process(c);
@@ -653,7 +756,7 @@ export async function startProxy(
         } else if (isStreaming) {
           // Normal SSE mode — stream + buffer for usage
           const chunks: Buffer[] = [];
-          proxyRes.on("data", (chunk: Buffer) => {
+          bodySource.on("data", (chunk: Buffer) => {
             let bufs = patcher ? patcher.process(chunk) : [chunk];
             bufs = bufs.flatMap((b) => readGuard.process(b));
             for (const c of bufs) {
@@ -661,7 +764,7 @@ export async function startProxy(
               captureRes.write(c);
             }
           });
-          proxyRes.on("end", () => {
+          bodySource.on("end", () => {
             if (patcher) {
               for (const c of patcher.flush()) {
                 const guarded = readGuard.process(c);
@@ -701,11 +804,11 @@ export async function startProxy(
         } else {
           // Non-streaming — buffer full response
           const chunks: Buffer[] = [];
-          proxyRes.on("data", (chunk: Buffer) => {
+          bodySource.on("data", (chunk: Buffer) => {
             chunks.push(chunk);
             captureRes.write(chunk);
           });
-          proxyRes.on("end", () => {
+          bodySource.on("end", () => {
             const fullBody = Buffer.concat(chunks).toString("utf-8");
             let parsedResponse: unknown;
             try {
