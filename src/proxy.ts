@@ -249,6 +249,9 @@ async function reIssueWithFullSchema(
       clientReq.on("close", onClientClose);
     }
     req.on("timeout", () => {
+      if (clientReq) {
+        clientReq.off("close", onClientClose);
+      }
       req.destroy(new Error("Request timeout"));
     });
     req.on("error", (err) => {
@@ -472,13 +475,20 @@ export async function startProxy(
       req.on("close", onClientClose);
 
       proxyReq.on("timeout", () => {
+        req.off("close", onClientClose);
         proxyReq.destroy(new Error("Request timeout"));
       });
       proxyReq.on("error", (err) => {
         req.off("close", onClientClose);
         console.error(`[llm-inspector] Proxy error: ${err.message}`);
         if (!res.writableEnded) {
-          res.writeHead(502).end();
+          if (!res.headersSent) {
+            res.writeHead(502, { "content-type": "text/plain" }).end(
+              `Bad Gateway: upstream error: ${err.message}`,
+            );
+          } else {
+            res.end();
+          }
         }
       });
       proxyReq.on("close", () => {
@@ -953,6 +963,7 @@ export async function startProxy(
     req.on("close", onClientClose);
 
     proxyReq.on("timeout", () => {
+      req.off("close", onClientClose);
       proxyReq.destroy(new Error("Request timeout"));
     });
 
@@ -963,7 +974,13 @@ export async function startProxy(
       captured.request_raw = rawHttpRequest;
       saveCapture(captured, captureDir).catch(() => {});
       if (!res.writableEnded) {
-        res.writeHead(502).end();
+        if (!res.headersSent) {
+          res.writeHead(502, { "content-type": "text/plain" }).end(
+            `Bad Gateway: upstream error: ${err.message}`,
+          );
+        } else {
+          res.end();
+        }
       }
     });
 
