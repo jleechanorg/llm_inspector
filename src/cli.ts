@@ -211,7 +211,9 @@ program
   .option("--dir <path>", "Custom capture directory")
   .action(async (opts) => {
     const dir = opts.dir || undefined;
-    let results = await analyzeCaptures(dir);
+    const last = opts.last ? parseInt(opts.last, 10) : undefined;
+    const sort = opts.sort || "time";
+    let results = await analyzeCaptures(dir, { last, sort });
 
     if (results.length === 0) {
       console.log(

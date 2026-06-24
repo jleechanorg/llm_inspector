@@ -3,7 +3,7 @@
  */
 
 import { readdir, readFile, rm, mkdir, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import type { CapturedRequest, ContentBlock, Message } from "./types.js";
@@ -150,6 +150,7 @@ export function formatTable(rows: string[][]): string {
  */
 export async function loadCapturedRequests(
   dir?: string,
+  options?: { last?: number; sort?: string },
 ): Promise<CapturedRequest[]> {
   const captureDir = dir || (await ensureCaptureDir());
   if (!existsSync(captureDir)) {
@@ -157,11 +158,43 @@ export async function loadCapturedRequests(
   }
 
   const files = await readdir(captureDir);
-  const jsonFiles = files
+  let jsonFiles = files
     .filter((f) => f.endsWith(".json") && !f.endsWith(".summary.json"))
     .sort();
-  const requests: CapturedRequest[] = [];
 
+  const last = options?.last;
+  const sort = options?.sort || "time";
+
+  // If sorting by time (default) and a limit is specified, slice directly
+  if (sort === "time" && last !== undefined && last > 0 && jsonFiles.length > last) {
+    jsonFiles = jsonFiles.slice(-last);
+  }
+
+  // If sorting by size or tokens, we can read stats without loading full files
+  if ((sort === "size" || sort === "tokens") && last !== undefined && last > 0 && jsonFiles.length > last) {
+    const fileWithSizes: { file: string; size: number }[] = [];
+    for (const file of jsonFiles) {
+      try {
+        const filepath = join(captureDir, file);
+        const stat = statSync(filepath);
+        fileWithSizes.push({ file, size: stat.size });
+      } catch {
+        // Skip
+      }
+    }
+    // Sort descending by size (largest first)
+    fileWithSizes.sort((a, b) => b.size - a.size);
+    // Take the top N largest
+    jsonFiles = fileWithSizes.slice(0, last).map((f) => f.file);
+  }
+
+  // If no limit is specified, check if the count is extremely large and apply a warning/safety limit
+  if (last === undefined && jsonFiles.length > 500) {
+    console.warn(`[llm-inspector] Warning: Found ${jsonFiles.length} captures. To prevent Out of Memory, showing only the last 500. Use 'llm-inspector clean' to remove old captures.`);
+    jsonFiles = jsonFiles.slice(-500);
+  }
+
+  const requests: CapturedRequest[] = [];
   for (const file of jsonFiles) {
     try {
       const content = await readFile(join(captureDir, file), "utf-8");
