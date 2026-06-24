@@ -4,14 +4,16 @@
  * Directly tests applyStubToolFilter and the stub schema format.
  */
 
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 
 const SCRIPT_DIR = fileURLToPath(new URL(".", import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "../../../../");
-const OUT_DIR = resolve(REPO_ROOT, "llm_inspector/docs/evidence/on-demand-stub-schema-2026-04-11");
+const OUT_DIR = existsSync(resolve(REPO_ROOT, "dist/cli.js"))
+  ? resolve(REPO_ROOT, "docs/evidence/on-demand-stub-schema-2026-04-11")
+  : resolve(REPO_ROOT, "llm_inspector/docs/evidence/on-demand-stub-schema-2026-04-11");
 
 // ── Inline the actual implementation (same as proxy.ts) ─────────────────────
 const HEAVY_TOOL_NAMES = [
