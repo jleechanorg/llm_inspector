@@ -181,6 +181,7 @@ async function reIssueWithFullSchema(
   const bodyStr = JSON.stringify(fullBody);
   const bodyBuf = Buffer.from(bodyStr, "utf-8");
   const headers = { ...forwardHeaders, "content-length": String(bodyBuf.length) };
+  delete headers["accept-encoding"];
 
   return new Promise((resolve, reject) => {
     const transport = upstream.protocol === "https:" ? https : http;
@@ -369,6 +370,7 @@ export async function startProxy(
       const forwardHeaders = { ...reqHeaders };
       forwardHeaders["host"] = upstream.host;
       delete forwardHeaders["content-length"];
+      delete forwardHeaders["accept-encoding"];
 
       const proxyReq = transport.request(
         upstream.href,
@@ -526,6 +528,7 @@ export async function startProxy(
     const forwardHeaders: Record<string, string> = { ...reqHeaders };
     forwardHeaders["host"] = upstream.host;
     forwardHeaders["content-length"] = String(forwardBody.length);
+    delete forwardHeaders["accept-encoding"];
 
     const transport = upstream.protocol === "https:" ? https : http;
 
