@@ -46,8 +46,23 @@ describe("Proxy Integration - Fibonacci, Decompression & Modes", () => {
           const agent = parsed.tools?.find((t: any) => t.name === "Agent");
           if (agent && agent.input_schema?.properties?.originalComplexProperty) {
             // Re-issued request containing the full schema!
-            res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8" });
-            res.write("data: {\"type\": \"message\", \"content\": \"re-issued success\"}\n\n");
+            // When gzipResponse flag is set, return gzip-compressed body to
+            // exercise the reIssueWithFullSchema decompression path.
+            const reissuedText =
+              "data: {\"type\": \"message\", \"content\": \"re-issued success\"}\n\n";
+            if (gzipResponse) {
+              const compressed = gzipSync(Buffer.from(reissuedText, "utf-8"));
+              res.writeHead(200, {
+                "content-type": "text/event-stream; charset=utf-8",
+                "content-encoding": "gzip",
+              });
+              res.write(compressed);
+            } else {
+              res.writeHead(200, {
+                "content-type": "text/event-stream; charset=utf-8",
+              });
+              res.write(reissuedText);
+            }
           } else {
             // First request in optimized mode: stubbed, return tool use to trigger re-issue
             res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8" });
@@ -326,6 +341,66 @@ describe("Proxy Integration - Fibonacci, Decompression & Modes", () => {
     expect(text).not.toContain('"input_tokens":0');
 
     await new Promise<void>((resolve) => waferProxy.close(() => resolve()));
+  });
+
+  // Regression: reIssueWithFullSchema used to return gzip bytes decoded as
+  // utf-8 (mojibake) when upstream returned content-encoding: gzip on the
+  // re-issued request. This test forces the mock upstream to gzip the
+  // re-issued response and asserts the client receives plain text.
+  it("decompresses gzipped re-issue response in on-demand mode (regression)", async () => {
+    gzipResponse = true;
+
+    const ONDEMAND_PORT = PROXY_PORT + 5;
+    const ondemandProxy = await startProxy({
+      port: ONDEMAND_PORT,
+      upstream: `http://127.0.0.1:${UPSTREAM_PORT}`,
+      verbose: false,
+      toolMode: "on-demand",
+    });
+
+    upstreamRequests = [];
+
+    const body = {
+      model: "claude-3-5-sonnet",
+      tools: [
+        {
+          name: "Agent",
+          description: "Spawn an agent to handle subtasks",
+          input_schema: {
+            type: "object",
+            properties: {
+              task: { type: "string" },
+              originalComplexProperty: { type: "string" },
+            },
+            required: ["task"],
+          },
+        },
+      ],
+      messages: [{ role: "user", content: "do task" }],
+    };
+
+    const response = await fetch(
+      `http://127.0.0.1:${ONDEMAND_PORT}/v1/messages`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-test-case": "on-demand",
+        },
+        body: JSON.stringify(body),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const text = await response.text();
+
+    // Pre-fix behavior: text would contain binary garbage from gzip bytes
+    // interpreted as utf-8 (mojibake). Post-fix: text contains plain SSE.
+    expect(text).toContain("re-issued success");
+    expect(text).not.toContain("�"); // replacement char indicates mojibake
+
+    await new Promise<void>((resolve) => ondemandProxy.close(() => resolve()));
+    gzipResponse = false;
   });
 });
 
