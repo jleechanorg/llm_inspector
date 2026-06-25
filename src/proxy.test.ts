@@ -402,5 +402,69 @@ describe("Proxy Integration - Fibonacci, Decompression & Modes", () => {
     await new Promise<void>((resolve) => ondemandProxy.close(() => resolve()));
     gzipResponse = false;
   });
+
+  // Regression for PR #10: when upstream emits error mid-stream after the
+  // proxy has already written partial response headers/body to the client,
+  // the proxy must NOT crash with "Cannot set headers after they are sent".
+  // The fix added `if (!res.headersSent)` guards at proxy.ts:756 (gunzip
+  // error) and proxy.ts:787 (proxyRes error).
+  it("survives mid-stream upstream error after partial response (PR #10 regression)", async () => {
+    const ERROR_PORT = PROXY_PORT + 6;
+    const ERROR_UPSTREAM_PORT = 29999;
+
+    // Dedicated mock upstream that streams partial bytes then destroys the
+    // socket (emitting 'error' on the proxy's response stream).
+    const errorUpstream = http.createServer((req, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write("data: chunk1\n\n");
+      // Destroy mid-stream. Pre-fix: proxy would crash on next error handler
+      // trying to writeHead(502) after partial body was already flushed.
+      setTimeout(() => {
+        res.destroy(new Error("upstream gone"));
+      }, 10);
+    });
+    await new Promise<void>((r) =>
+      errorUpstream.listen(ERROR_UPSTREAM_PORT, r),
+    );
+
+    const errorProxy = await startProxy({
+      port: ERROR_PORT,
+      upstream: `http://127.0.0.1:${ERROR_UPSTREAM_PORT}`,
+      verbose: false,
+      toolMode: "observe",
+    });
+
+    let didCrash = false;
+    const uncaughtHandler = (err: Error) => {
+      if (err.message.includes("Cannot set headers")) didCrash = true;
+    };
+    process.on("uncaughtException", uncaughtHandler);
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${ERROR_PORT}/v1/messages`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ test: "mid-stream-error" }),
+        },
+      ).catch(() => null);
+
+      // Either response object exists with the partial bytes, or fetch
+      // rejected — both are acceptable. The proxy must not have crashed.
+      if (response) {
+        // Try to read whatever came back; expect either chunk1 or empty
+        const text = await response.text().catch(() => "");
+        // No assertion on content (timing-dependent); just verify no crash
+        expect(typeof text).toBe("string");
+      }
+    } finally {
+      process.off("uncaughtException", uncaughtHandler);
+      await new Promise<void>((r) => errorProxy.close(() => r()));
+      await new Promise<void>((r) => errorUpstream.close(() => r()));
+    }
+
+    expect(didCrash).toBe(false);
+  });
 });
 
