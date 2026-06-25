@@ -1,0 +1,16 @@
+{
+  "bundle_version": "1.0",
+  "run_id": "comprehensive-proxy-tests-2026-06-24",
+  "bundle_timestamp": "2026-06-24T18:44:00Z",
+  "git_provenance": {
+    "git_head": "9f5a6d6935216184b3f8bc179db4c70721d598c9",
+    "branch": "test/comprehensive-proxy-tests",
+    "merge_base": "origin/main",
+    "commits_ahead_of_main": 1
+  },
+  "summary": {
+    "total_tests": 6,
+    "passed": 6,
+    "failed": 0
+  }
+}

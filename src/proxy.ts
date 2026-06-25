@@ -199,6 +199,7 @@ async function reIssueWithFullSchema(
   stubbedTools: Map<string, unknown>,
   upstream: URL,
   forwardHeaders: Record<string, string>,
+  clientReq?: http.IncomingMessage,
 ): Promise<{ body: string; status: number }> {
   const fullTools = originalBody.tools
     ? (originalBody.tools as unknown[]).map((tool) => {
@@ -224,7 +225,7 @@ async function reIssueWithFullSchema(
     const transport = upstream.protocol === "https:" ? https : http;
     const req = transport.request(
       upstream.href,
-      { method: "POST", headers },
+      { method: "POST", headers, timeout: 120000 },
       (res) => {
         const chunks: Buffer[] = [];
         res.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -232,9 +233,35 @@ async function reIssueWithFullSchema(
           const body = Buffer.concat(chunks).toString("utf-8");
           resolve({ body, status: res.statusCode || 200 });
         });
+        res.on("error", (err) => {
+          res.destroy();
+          reject(err);
+        });
+        res.on("close", () => {
+          res.destroy();
+        });
       },
     );
-    req.on("error", reject);
+    const onClientClose = () => {
+      req.destroy();
+    };
+    if (clientReq) {
+      clientReq.on("close", onClientClose);
+    }
+    req.on("timeout", () => {
+      req.destroy(new Error("Request timeout"));
+    });
+    req.on("error", (err) => {
+      if (clientReq) {
+        clientReq.off("close", onClientClose);
+      }
+      reject(err);
+    });
+    req.on("close", () => {
+      if (clientReq) {
+        clientReq.off("close", onClientClose);
+      }
+    });
     req.write(bodyBuf);
     req.end();
   });
@@ -423,15 +450,39 @@ export async function startProxy(
 
       const proxyReq = transport.request(
         upstream.href,
-        { method: "GET", headers: forwardHeaders },
+        { method: "GET", headers: forwardHeaders, timeout: 120000 },
         (proxyRes) => {
           res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
+
+          proxyRes.on("error", (err) => {
+            console.error(`[llm-inspector] Proxy response error: ${err.message}`);
+            proxyRes.destroy();
+            res.destroy();
+          });
+          proxyRes.on("close", () => {
+            proxyRes.destroy();
+          });
+
           proxyRes.pipe(res);
         },
       );
+      const onClientClose = () => {
+        proxyReq.destroy();
+      };
+      req.on("close", onClientClose);
+
+      proxyReq.on("timeout", () => {
+        proxyReq.destroy(new Error("Request timeout"));
+      });
       proxyReq.on("error", (err) => {
+        req.off("close", onClientClose);
         console.error(`[llm-inspector] Proxy error: ${err.message}`);
-        res.writeHead(502).end();
+        if (!res.writableEnded) {
+          res.writeHead(502).end();
+        }
+      });
+      proxyReq.on("close", () => {
+        req.off("close", onClientClose);
       });
       proxyReq.end();
       return;
@@ -586,7 +637,7 @@ export async function startProxy(
 
     const proxyReq = transport.request(
       upstream.href,
-      { method, headers: forwardHeaders },
+      { method, headers: forwardHeaders, timeout: 120000 },
       (proxyRes) => {
         const statusCode = proxyRes.statusCode || 200;
         const contentType = (proxyRes.headers["content-type"] as string) || "";
@@ -623,18 +674,31 @@ export async function startProxy(
           captureRes.setHeader(k, v);
         }
 
+        let upstreamFinished = false;
+        let proxyResFinished = false;
+
+        proxyRes.on("end", () => {
+          proxyResFinished = true;
+        });
+
         // The body source the three branches below will listen to. Defaults to
         // proxyRes (passthrough); becomes the gunzip stream when we decompress.
         let bodySource: Readable = proxyRes;
+        let gunzipStream: Readable | null = null;
         if (isGzip) {
           const gunzip = createGunzip();
+          gunzipStream = gunzip;
           gunzip.on("error", (gzErr) => {
+            if (upstreamFinished) return;
+            upstreamFinished = true;
             // Upstream claimed gzip but the bytes aren't actually gzip, or the
             // stream was truncated. Mirror the proxyReq.on("error") 502 pattern
             // so the client gets a clean failure instead of a hanging socket.
             console.error(
               `[llm-inspector] Gunzip error: ${gzErr.message}. Returning 502.`,
             );
+            gunzip.destroy();
+            proxyRes.destroy();
             try {
               captured.response = { status: 502 };
               captured.request_raw = rawHttpRequest;
@@ -650,9 +714,49 @@ export async function startProxy(
               res.end();
             }
           });
+          gunzip.on("close", () => {
+            if (upstreamFinished) return;
+            upstreamFinished = true;
+            gunzip.destroy();
+            proxyRes.destroy();
+            if (!res.writableEnded) {
+              res.end();
+            }
+          });
           proxyRes.pipe(gunzip);
           bodySource = gunzip;
         }
+
+        // Listeners for proxyRes
+        proxyRes.on("error", (err) => {
+          if (proxyResFinished || upstreamFinished) return;
+          upstreamFinished = true;
+          console.error(`[llm-inspector] Upstream response error: ${err.message}`);
+          proxyRes.destroy();
+          if (gunzipStream) {
+            gunzipStream.destroy();
+          }
+          if (!res.writableEnded) {
+            if (!res.headersSent) {
+              res.writeHead(502, { "content-type": "text/plain" }).end(
+                `Bad Gateway: upstream response error: ${err.message}`,
+              );
+            } else {
+              res.end();
+            }
+          }
+        });
+        proxyRes.on("close", () => {
+          if (proxyResFinished || upstreamFinished) return;
+          upstreamFinished = true;
+          proxyRes.destroy();
+          if (gunzipStream) {
+            gunzipStream.destroy();
+          }
+          if (!res.writableEnded) {
+            res.end();
+          }
+        });
 
         if (isStreaming && requestId && requestBuffers.has(requestId)) {
           // On-demand SSE mode
@@ -669,6 +773,7 @@ export async function startProxy(
           });
 
           bodySource.on("end", async () => {
+            upstreamFinished = true;
             if (patcher) {
               for (const c of patcher.flush()) {
                 const guarded = readGuard.process(c);
@@ -702,6 +807,7 @@ export async function startProxy(
                     buf.stubbedTools,
                     upstream,
                     forwardHeaders,
+                    req,
                   );
 
                 let reIssuedUsage:
@@ -765,6 +871,7 @@ export async function startProxy(
             }
           });
           bodySource.on("end", () => {
+            upstreamFinished = true;
             if (patcher) {
               for (const c of patcher.flush()) {
                 const guarded = readGuard.process(c);
@@ -809,6 +916,7 @@ export async function startProxy(
             captureRes.write(chunk);
           });
           bodySource.on("end", () => {
+            upstreamFinished = true;
             const fullBody = Buffer.concat(chunks).toString("utf-8");
             let parsedResponse: unknown;
             try {
@@ -839,12 +947,28 @@ export async function startProxy(
       },
     );
 
+    const onClientClose = () => {
+      proxyReq.destroy();
+    };
+    req.on("close", onClientClose);
+
+    proxyReq.on("timeout", () => {
+      proxyReq.destroy(new Error("Request timeout"));
+    });
+
     proxyReq.on("error", (err) => {
+      req.off("close", onClientClose);
       console.error(`[llm-inspector] Upstream error: ${err.message}`);
       captured.response = { status: 502 };
       captured.request_raw = rawHttpRequest;
       saveCapture(captured, captureDir).catch(() => {});
-      res.writeHead(502).end();
+      if (!res.writableEnded) {
+        res.writeHead(502).end();
+      }
+    });
+
+    proxyReq.on("close", () => {
+      req.off("close", onClientClose);
     });
 
     proxyReq.write(forwardBody);

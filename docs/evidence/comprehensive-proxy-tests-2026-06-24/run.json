@@ -1,0 +1,34 @@
+{
+  "scenarios": [
+    {
+      "name": "transparent routes streaming requests and outputs expected chunks",
+      "status": "PASS",
+      "errors": []
+    },
+    {
+      "name": "transparent decompresses gzip responses from upstream and passes uncompressed stream to client",
+      "status": "PASS",
+      "errors": []
+    },
+    {
+      "name": "saves capture JSON and summary JSON to LLM_INSPECTOR_CAPTURE_DIR",
+      "status": "PASS",
+      "errors": []
+    },
+    {
+      "name": "strips lean-remove tools in lean mode",
+      "status": "PASS",
+      "errors": []
+    },
+    {
+      "name": "stubs heavy tools in on-demand mode and handles re-issue dynamically",
+      "status": "PASS",
+      "errors": []
+    },
+    {
+      "name": "patches input_tokens:0 to estimated value in wafer-fix mode",
+      "status": "PASS",
+      "errors": []
+    }
+  ]
+}
