@@ -252,6 +252,8 @@ async function reIssueWithFullSchema(
       if (clientReq) {
         clientReq.off("close", onClientClose);
       }
+      // Fix: clean up onClientClose listener before destroying on timeout
+      // (previously leaked listener; see PR #10 + AAR finding #2).
       req.destroy(new Error("Request timeout"));
     });
     req.on("error", (err) => {
