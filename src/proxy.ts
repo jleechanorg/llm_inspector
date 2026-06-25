@@ -228,11 +228,42 @@ async function reIssueWithFullSchema(
       { method: "POST", headers, timeout: 120000 },
       (res) => {
         const chunks: Buffer[] = [];
-        res.on("data", (chunk: Buffer) => chunks.push(chunk));
-        res.on("end", () => {
-          const body = Buffer.concat(chunks).toString("utf-8");
-          resolve({ body, status: res.statusCode || 200 });
-        });
+        // Detect gzip on the re-issue response. Some upstreams ignore the
+        // accept-encoding: identity we forwarded and return content-encoding:
+        // gzip anyway. Without decompression here we'd return gzip bytes
+        // decoded as utf-8 (mojibake) to the caller of reIssueWithFullSchema,
+        // which then writes them to the client. Brotli/deflate deferred.
+        const responseEncoding = (res.headers["content-encoding"] as
+          | string
+          | undefined) ?? "";
+        const isGzip = responseEncoding === "gzip";
+        const bodySource: NodeJS.ReadableStream = isGzip
+          ? (() => {
+              const gz = createGunzip();
+              gz.on("data", (chunk: Buffer) => chunks.push(chunk));
+              gz.on("end", () => {
+                const body = Buffer.concat(chunks).toString("utf-8");
+                resolve({ body, status: res.statusCode || 200 });
+              });
+              gz.on("error", (gzErr) => {
+                res.destroy();
+                reject(
+                  new Error(
+                    `reIssue response decompression failed: ${gzErr.message}`,
+                  ),
+                );
+              });
+              return gz;
+            })()
+          : res;
+
+        if (!isGzip) {
+          res.on("data", (chunk: Buffer) => chunks.push(chunk));
+          res.on("end", () => {
+            const body = Buffer.concat(chunks).toString("utf-8");
+            resolve({ body, status: res.statusCode || 200 });
+          });
+        }
         res.on("error", (err) => {
           res.destroy();
           reject(err);
@@ -240,6 +271,10 @@ async function reIssueWithFullSchema(
         res.on("close", () => {
           res.destroy();
         });
+
+        if (isGzip) {
+          res.pipe(bodySource as NodeJS.ReadWriteStream);
+        }
       },
     );
     const onClientClose = () => {
