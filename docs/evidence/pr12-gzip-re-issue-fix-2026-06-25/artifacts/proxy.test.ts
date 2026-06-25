@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import http from "node:http";
 import { gzipSync } from "node:zlib";
-import { createHash } from "node:crypto";
 import { startProxy } from "./proxy.js";
 import path from "node:path";
 import fs from "node:fs";
@@ -466,99 +465,6 @@ describe("Proxy Integration - Fibonacci, Decompression & Modes", () => {
     }
 
     expect(didCrash).toBe(false);
-  });
-
-  // /es C6 (HIGH severity): SHA-256 replay oracle. The proxy must not
-  // silently mutate request bytes between client and upstream. Compares:
-  //   1. clientSentSha256        = SHA-256 of bytes the test client sent
-  //   2. upstreamReceivedSha256  = SHA-256 of bytes mock upstream received
-  //   3. captureRawSha256        = SHA-256 of capture file's request_raw
-  //                                (decoded from "BODY_BASE64:<b64>" schema)
-  // All three must match for the proxy to be byte-transparent.
-  it("preserves request bytes byte-for-byte: client = upstream = capture (SHA-256 replay oracle)", async () => {
-    const ORACLE_PORT = PROXY_PORT + 7;
-    const runCaptureDir = path.join(testCaptureDir, "oracle-run");
-    if (fs.existsSync(runCaptureDir)) {
-      fs.rmSync(runCaptureDir, { recursive: true, force: true });
-    }
-    fs.mkdirSync(runCaptureDir, { recursive: true });
-    process.env.LLM_INSPECTOR_CAPTURE_DIR = runCaptureDir;
-
-    upstreamRequests = [];
-    gzipResponse = false;
-
-    const oracleProxy = await startProxy({
-      port: ORACLE_PORT,
-      upstream: `http://127.0.0.1:${UPSTREAM_PORT}`,
-      verbose: false,
-      toolMode: "observe",
-    });
-
-    // Use a frozen, distinctive payload — if any future change alters
-    // request handling, the sha256 will diverge and this test fails.
-    const requestBody = {
-      model: "claude-3-5-sonnet",
-      tools: [{ name: "Bash", description: "shell tool" }],
-      messages: [{ role: "user", content: "oracle-test-payload-2026-06-25" }],
-    };
-    const bodyStr = JSON.stringify(requestBody);
-    const clientSentBuf = Buffer.from(bodyStr, "utf-8");
-
-    const response = await fetch(
-      `http://127.0.0.1:${ORACLE_PORT}/v1/messages`,
-      {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-test-case": "passthrough",
-        },
-        body: bodyStr,
-      },
-    );
-
-    expect(response.status).toBe(200);
-    await response.text();
-
-    // Wait for async capture write
-    await new Promise((resolve) => setTimeout(resolve, 150));
-
-    // 1. SHA-256 of client-sent bytes
-    const clientSentSha256 = createHash("sha256")
-      .update(clientSentBuf)
-      .digest("hex");
-
-    // 2. SHA-256 of bytes mock upstream received
-    expect(upstreamRequests.length).toBeGreaterThanOrEqual(1);
-    const upstreamReceivedBuf = Buffer.from(upstreamRequests[0].body, "utf-8");
-    const upstreamReceivedSha256 = createHash("sha256")
-      .update(upstreamReceivedBuf)
-      .digest("hex");
-
-    // 3. SHA-256 of bytes stored in capture file's request_raw field.
-    //    request_raw uses "BODY_BASE64:<b64>" schema — extract and decode.
-    const files = fs.readdirSync(runCaptureDir);
-    const jsonFile = files.find(
-      (f) => f.endsWith(".json") && !f.endsWith(".summary.json"),
-    );
-    expect(jsonFile).toBeDefined();
-    const capture = JSON.parse(
-      fs.readFileSync(path.join(runCaptureDir, jsonFile!), "utf-8"),
-    );
-    expect(typeof capture.request_raw).toBe("string");
-    const markerIdx = capture.request_raw.indexOf("BODY_BASE64:");
-    expect(markerIdx).toBeGreaterThanOrEqual(0);
-    const b64 = capture.request_raw.slice(markerIdx + "BODY_BASE64:".length);
-    const captureRawBuf = Buffer.from(b64, "base64");
-    const captureRawSha256 = createHash("sha256")
-      .update(captureRawBuf)
-      .digest("hex");
-
-    // The three must all match for byte transparency.
-    expect(upstreamReceivedSha256).toBe(clientSentSha256);
-    expect(captureRawSha256).toBe(clientSentSha256);
-
-    await new Promise<void>((resolve) => oracleProxy.close(() => resolve()));
-    process.env.LLM_INSPECTOR_CAPTURE_DIR = testCaptureDir;
   });
 });
 

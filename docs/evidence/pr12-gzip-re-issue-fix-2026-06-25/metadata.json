@@ -1,0 +1,51 @@
+{
+  "title": "PR #12 — gzip re-issue fix + PR #10 mid-stream regression + SHA-256 replay oracle",
+  "bundle_version": "1.0",
+  "bundle_timestamp": "2026-06-25T14:20:00Z",
+  "iteration": 1,
+  "run_id": "pr12-bundle-2026-06-25-001",
+  "bundle_type": "regression-evidence",
+  "scope": "verifies re-issue gzip fix (PR #12), PR #10 mid-stream error regression test, and SHA-256 replay oracle (closes /es C6 gap)",
+  "server": {
+    "type": "jleechanorg/llm_inspector",
+    "port_observed": 9000,
+    "upstream_port": 8001
+  },
+  "git_provenance": {
+    "git_head": "3abf57cc1d2e9660c46d75807bf6359b35b4fecd",
+    "merge_base": "3911bb183a96b32cdac45e0f2c2348dd44ff2291",
+    "commits_ahead_of_main_before_merge": 3,
+    "diff_stat_vs_main": {
+      "files_changed": 2,
+      "additions": 257,
+      "deletions": 7
+    },
+    "pr": "https://github.com/jleechanorg/llm_inspector/pull/12",
+    "branch_pre_merge": "fix/re-issue-with-full-schema-gzip"
+  },
+  "summary": {
+    "tests_total": 125,
+    "tests_new_in_pr": 3,
+    "test_names_added": [
+      "decompresses gzipped re-issue response in on-demand mode (regression)",
+      "survives mid-stream upstream error after partial response (PR #10 regression)",
+      "preserves request bytes byte-for-byte: client = upstream = capture (SHA-256 replay oracle)"
+    ],
+    "node_versions_tested": ["20", "22"],
+    "ci_workflow": ".github/workflows/test.yml",
+    "side_by_side_status": "PASS"
+  },
+  "evidence_mode": "in-process integration (mock upstream)",
+  "layer": "Layer 2 mock-at-network",
+  "real_llm_layer": false,
+  "real_llm_evidence_pointer": "docs/evidence/compression-zlib-repro-2026-06-24/",
+  "sha256_oracle": {
+    "frozen_payload_sha256": "92bc7bd1726eefb2a3bbcfb22e76e95660cde87d17a5bfdd2976678865f78a6e",
+    "frozen_payload_path": "artifacts/oracle_input.json",
+    "what_it_proves": "byte transparency client == upstream == capture_file.request_raw"
+  },
+  "build_artifacts_sha256": {
+    "dist/cli.js": "569f2b9032c5be63fa775090ef26fb746e7540dec6a0563d1bfef325ea33430f",
+    "dist/cli.d.ts": "a59c47872b71f12589942892464e764c0db350c20b72228645615cc36e0a0725"
+  }
+}

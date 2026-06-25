@@ -1,0 +1,38 @@
+ ✓ src/filters.test.ts > applyLeanFilter > strips chrome and drive tools, keeps everything else 3ms
+ ✓ src/filters.test.ts > applyLeanFilter > returns body unmodified when no tools match remove list 0ms
+ ✓ src/filters.test.ts > applyLeanFilter > handles empty tools array 0ms
+ ✓ src/filters.test.ts > applyOnDemandFilter > replaces heavy tools with stubs, preserves originals in stubbedTools map 0ms
+ ✓ src/filters.test.ts > applyOnDemandFilter > passes through non-heavy tools unchanged 0ms
+ ✓ src/filters.test.ts > applyLeanOnDemandFilter > strips lean-remove tools AND stubs heavy tools in one pass 0ms
+ ✓ src/filters.test.ts > applyLeanOnDemandFilter > lean-remove takes priority: chrome tool is NOT stubbed even if it were in heavy list 0ms
+ ✓ src/filters.test.ts > applyLeanOnDemandFilter > returns body unmodified when nothing to strip or stub 0ms
+ ✓ src/filters.test.ts > applyLeanOnDemandFilter > handles missing tools field 0ms
+ ✓ src/filters.test.ts > parseModeFeatures > parses single lean 0ms
+ ✓ src/filters.test.ts > parseModeFeatures > parses single on-demand 0ms
+ ✓ src/filters.test.ts > parseModeFeatures > parses wafer-fix alone 0ms
+ ✓ src/filters.test.ts > parseModeFeatures > parses lean,wafer-fix combo 0ms
+ ✓ src/filters.test.ts > parseModeFeatures > parses on-demand,wafer-fix combo 0ms
+ ✓ src/filters.test.ts > parseModeFeatures > parses lean,on-demand,wafer-fix triple combo 0ms
+ ✓ src/filters.test.ts > parseModeFeatures > legacy lean-on-demand sets both lean and onDemand 1ms
+ ✓ src/filters.test.ts > parseModeFeatures > observe returns all false 0ms
+ ✓ src/filters.test.ts > estimateInputTokens > divides bytes by 4 and rounds 0ms
+ ✓ src/filters.test.ts > WaferFixPatcher > patches input_tokens:0 when full first event arrives in one chunk 0ms
+ ✓ src/filters.test.ts > WaferFixPatcher > buffers partial first event, patches when boundary arrives 0ms
+ ✓ src/filters.test.ts > WaferFixPatcher > passes subsequent chunks through without buffering 0ms
+ ✓ src/filters.test.ts > WaferFixPatcher > does not patch when input_tokens is non-zero 0ms
+ ✓ src/filters.test.ts > WaferFixPatcher > flush returns remaining buffer if stream ends before \n\n 0ms
+ ✓ src/filters.test.ts > ReadSizeGuard > passes through when disabled 0ms
+ ✓ src/filters.test.ts > ReadSizeGuard > passes through chunks without tool_result 0ms
+ ✓ src/filters.test.ts > ReadSizeGuard > passes through small tool_result content under 50KB 0ms
+ ✓ src/filters.test.ts > ReadSizeGuard > truncates tool_result content exceeding 50KB 0ms
+ ✓ src/filters.test.ts > ReadSizeGuard > truncates streaming delta blocks exceeding 50KB 1ms
+ ✓ src/filters.test.ts > ReadSizeGuard > flush returns empty (stateless guard) 0ms
+ ✓ src/proxy.test.ts > Proxy Integration - Fibonacci, Decompression & Modes > transparently routes streaming requests and outputs expected chunks 14ms
+ ✓ src/proxy.test.ts > Proxy Integration - Fibonacci, Decompression & Modes > transparently decompresses gzip responses from upstream and passes uncompressed stream to client 4ms
+ ✓ src/proxy.test.ts > Proxy Integration - Fibonacci, Decompression & Modes > saves capture JSON and summary JSON to LLM_INSPECTOR_CAPTURE_DIR 155ms
+ ✓ src/proxy.test.ts > Proxy Integration - Fibonacci, Decompression & Modes > preserves request bytes byte-for-byte: client = upstream = capture (SHA-256 replay oracle) 155ms
+ ✓ src/proxy.test.ts > Proxy Integration - Fibonacci, Decompression & Modes > strips lean-remove tools in lean mode 4ms
+ ✓ src/proxy.test.ts > Proxy Integration - Fibonacci, Decompression & Modes > stubs heavy tools in on-demand mode and handles re-issue dynamically 9ms
+ ✓ src/proxy.test.ts > Proxy Integration - Fibonacci, Decompression & Modes > patches input_tokens:0 to estimated value in wafer-fix mode 3ms
+ ✓ src/proxy.test.ts > Proxy Integration - Fibonacci, Decompression & Modes > decompresses gzipped re-issue response in on-demand mode (regression) 5ms
+ ✓ src/proxy.test.ts > Proxy Integration - Fibonacci, Decompression & Modes > survives mid-stream upstream error after partial response (PR #10 regression) 19ms

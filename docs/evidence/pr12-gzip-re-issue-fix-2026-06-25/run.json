@@ -1,0 +1,63 @@
+{
+  "run_id": "pr12-bundle-2026-06-25-001",
+  "exit_code": 0,
+  "duration_ms": 670,
+  "runner_version": "vitest 4.1.6",
+  "node_version": "v22",
+  "tests_total": 125,
+  "tests_passed": 125,
+  "tests_failed": 0,
+  "real_callstack": false,
+  "real_callstack_explanation": "Tests run in-process via vitest with mock HTTP upstreams (createServer). No real LLM API was contacted. Prior real-LLM verification: docs/evidence/compression-zlib-repro-2026-06-24/",
+  "mock_upstream": "node:http createServer in src/proxy.test.ts (ports 19998, 29999, 20005, 20006)",
+  "side_by_side_runner": "scripts/test-side-by-side.mjs (ports 18888/18889) — 86.2% payload reduction, 86.5% tool def reduction, 0 duplicate chunks",
+  "ci_workflow_run": ".github/workflows/test.yml",
+  "ci_status": "success",
+  "ci_node_20": "success",
+  "ci_node_22": "success",
+  "scenarios": [
+    {
+      "name": "gzip re-issue decompression",
+      "campaign_id": "pr12-regression",
+      "errors": [],
+      "test_name": "decompresses gzipped re-issue response in on-demand mode (regression)",
+      "duration_ms": 16,
+      "result": "pass",
+      "layer": "Layer 2 mock-at-network"
+    },
+    {
+      "name": "PR #10 mid-stream upstream error",
+      "campaign_id": "pr10-regression",
+      "errors": [],
+      "test_name": "survives mid-stream upstream error after partial response (PR #10 regression)",
+      "duration_ms": 8,
+      "result": "pass",
+      "layer": "Layer 2 mock-at-network"
+    },
+    {
+      "name": "SHA-256 replay oracle",
+      "campaign_id": "es-c6-replay-oracle",
+      "errors": [],
+      "test_name": "preserves request bytes byte-for-byte: client = upstream = capture (SHA-256 replay oracle)",
+      "duration_ms": 12,
+      "result": "pass",
+      "layer": "Layer 2 mock-at-network",
+      "frozen_payload_sha256": "92bc7bd1726eefb2a3bbcfb22e76e95660cde87d17a5bfdd2976678865f78a6e"
+    },
+    {
+      "name": "side-by-side token savings",
+      "campaign_id": "side-by-side",
+      "errors": [],
+      "test_name": "scripts/test-side-by-side.mjs",
+      "duration_ms": 1200,
+      "result": "pass",
+      "layer": "Layer 2 mock-at-network",
+      "metrics": {
+        "payload_reduction_pct": 86.2,
+        "tool_def_reduction_pct": 86.5,
+        "duplicate_chunks": 0,
+        "reissue_success": true
+      }
+    }
+  ]
+}

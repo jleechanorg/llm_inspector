@@ -1,0 +1,1 @@
+{"model":"claude-3-5-sonnet","tools":[{"name":"Bash","description":"shell tool"}],"messages":[{"role":"user","content":"oracle-test-payload-2026-06-25"}]}
