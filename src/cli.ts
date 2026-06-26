@@ -13,7 +13,7 @@
 
 import { Command } from "commander";
 import { existsSync, statSync } from "node:fs";
-import { readFile, unlink, readdir } from "node:fs/promises";
+import { readFile, unlink, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { spawn, execSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -56,14 +56,27 @@ program
 
     // ── Start ccproxy if not already running ────────────────────────────────
     if (!opts.upstream) {
-      let ccproxyRunning = false;
-      try {
-        // Check if port 8000 is in use (ccproxy's default)
-        execSync("lsof -ti:8000", { stdio: "pipe" });
-        ccproxyRunning = true;
-      } catch {
-        ccproxyRunning = false;
-      }
+      // Probe /openapi.json on port 8000 to confirm it's actually ccproxy,
+      // not e.g. mem0_server (FastAPI), which also binds 8000. Just checking
+      // `lsof -ti:8000` gives a false positive: any listener passes, so
+      // ccproxy never gets auto-spawned when another service occupies 8000.
+      //
+      // ccproxy-api 0.2.x serves an OpenAPI document with title
+      // "CCProxy API Server" at /openapi.json — that's the discriminator.
+      const probeCcproxy = async (): Promise<boolean> => {
+        try {
+          const res = await fetch("http://127.0.0.1:8000/openapi.json", {
+            signal: AbortSignal.timeout(1500),
+          });
+          if (!res.ok) return false;
+          const body = (await res.json()) as { info?: { title?: string } };
+          return body?.info?.title === "CCProxy API Server";
+        } catch {
+          return false;
+        }
+      };
+
+      const ccproxyRunning = await probeCcproxy();
 
       if (!ccproxyRunning) {
         const ccproxyBin = process.env.CCPROXY_BIN || "ccproxy";
@@ -73,8 +86,16 @@ program
             stdio: "ignore",
           });
           ccproxy.unref();
-          await new Promise((resolve) => setTimeout(resolve, 800));
-          console.log("ccproxy started on port 8000 (OAuth → Anthropic).");
+          // ccproxy takes ~3-12s to initialize plugins and bind (it sets up
+          // OAuth/credential plugins before uvicorn.bind()). Wait, then re-probe.
+          await new Promise((resolve) => setTimeout(resolve, 4000));
+          if (await probeCcproxy()) {
+            console.log("ccproxy started on port 8000 (OAuth → Anthropic).");
+          } else {
+            console.log(
+              "ccproxy spawn returned but :8000/openapi.json does not yet answer as CCProxy — may still be initializing. Continuing anyway.",
+            );
+          }
         } catch {
           console.log(
             "Warning: could not start ccproxy. Make sure it is installed:\n  uv tool install ccproxy-api",
@@ -147,6 +168,9 @@ program
     if (modeParts.includes("wafer-fix")) modeNotes.push("wafer-fix: input_tokens:0 patched with byte estimate");
     const toolModeNote = modeNotes.length > 0 ? ` [${modeNotes.join(" | ")}]` : " [observe: capture only]";
     console.log(`Capture proxy started on port ${port} (PID ${child.pid}).${toolModeNote}`);
+    // Persist the PID so `stop` and `status` can find this detached worker.
+    // Without this file, status reports STOPPED even when the proxy is alive.
+    await writeFile(pidFile, String(child.pid));
     console.log("Chain: your tool → llm-inspector :9000 (capture) → ccproxy :8000 (OAuth) → Anthropic");
     console.log("");
     console.log("To capture Claude Code traffic, set:");
@@ -295,17 +319,43 @@ program
     // The capture chain requires ccproxy-api on :8000 to be running.
     // llm-inspector start auto-launches ccproxy if needed, but report
     // its state here so users can see whether the chain is complete.
-    let ccproxyRunning = false;
-    try {
-      execSync("lsof -ti:8000", { stdio: "pipe" });
-      ccproxyRunning = true;
-    } catch {
-      ccproxyRunning = false;
-    }
+    //
+    // Probe /openapi.json title to distinguish ccproxy-api from other
+    // services that may occupy 8000 (e.g. mem0_server). Without this,
+    // `status` reports RUNNING when only mem0 is listening — false positive
+    // that misleads users into thinking the capture chain is healthy.
+    const probeCcproxy = async (): Promise<boolean> => {
+      try {
+        const res = await fetch("http://127.0.0.1:8000/openapi.json", {
+          signal: AbortSignal.timeout(1500),
+        });
+        if (!res.ok) return false;
+        const body = (await res.json()) as { info?: { title?: string } };
+        return body?.info?.title === "CCProxy API Server";
+      } catch {
+        return false;
+      }
+    };
+
+    const ccproxyRunning = await probeCcproxy();
     if (ccproxyRunning) {
       console.log("ccproxy: RUNNING (port 8000)");
     } else {
-      console.log("ccproxy: STOPPED (port 8000) — start with: llm-inspector start");
+      // Distinguish "nothing on 8000" from "something else on 8000"
+      let somethingElseOn8000 = false;
+      try {
+        execSync("lsof -ti:8000", { stdio: "pipe" });
+        somethingElseOn8000 = true;
+      } catch {
+        somethingElseOn8000 = false;
+      }
+      if (somethingElseOn8000) {
+        console.log(
+          "ccproxy: NOT DETECTED on :8000 (a different service is listening there) — start with: llm-inspector start",
+        );
+      } else {
+        console.log("ccproxy: STOPPED (port 8000) — start with: llm-inspector start");
+      }
     }
 
     const captureDir = await ensureCaptureDir();

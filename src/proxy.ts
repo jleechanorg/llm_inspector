@@ -538,7 +538,17 @@ export async function startProxy(
     }
 
     const upstreamBase = upstreamOverride || "http://127.0.0.1:8000";
-    // ccproxy-api expects /claude prefix; direct upstreams (Wafer, Anthropic) don't
+    // ccproxy-api 0.2.x mounts the Anthropic-compatible messages endpoint at
+    // /claude/v1/messages (NOT /api/v1/messages — that returns 404 on 0.2.7+).
+    // The /sdk prefix uses the local Claude SDK inside ccproxy (slower, with
+    // session state); we want /claude for OAuth-injected direct forwarding
+    // to api.anthropic.com. Direct upstreams (e.g. Wafer, Anthropic) expect
+    // the path verbatim — bypass the rewrite when upstreamOverride is set.
+    //
+    // Verified 2026-06-25: ccproxy 0.2.7 OpenAPI exposes
+    //   POST /claude/v1/messages
+    //   POST /claude/v1/chat/completions
+    // but NOT /api/v1/messages.
     const rewrittenPath = upstreamOverride
       ? (req.url || "/")
       : "/claude" + (req.url || "/");
