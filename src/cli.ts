@@ -309,6 +309,30 @@ program
       }
     }
 
+    // Fallback: if PID file is stale or missing (e.g. the worker was started
+    // directly by launchd and never went through `cli start`, so no PID file
+    // was written), check the port directly. This avoids the false STOPPED
+    // report when port 9000 is actually answering requests.
+    if (!running) {
+      try {
+        const portOwner = execSync("lsof -ti:9000 -sTCP:LISTEN", {
+          stdio: "pipe",
+        })
+          .toString()
+          .trim()
+          .split("\n")[0];
+        if (portOwner) {
+          const parsed = parseInt(portOwner, 10);
+          if (!Number.isNaN(parsed)) {
+            pid = parsed;
+            running = true;
+          }
+        }
+      } catch {
+        // nothing on 9000 either
+      }
+    }
+
     if (running) {
       console.log(`Proxy: RUNNING (PID ${pid})`);
     } else {
