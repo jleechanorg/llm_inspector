@@ -106,7 +106,36 @@ function buildForwardHeaders(
     delete headers["content-length"];
   }
   delete headers["accept-encoding"];
-  delete headers["transfer-encoding"];
+  // RFC 7230 §6.1 hop-by-hop header stripping. These describe a single
+  // transport-level connection, not the resource, and must not be
+  // forwarded when the proxy opens its own connection to upstream.
+  // Also parses `Connection:` to extract named connection-options
+  // (e.g., "Connection: keep-alive, X-Custom" — strip X-Custom too).
+  const connectionOptions = (headers["connection"] ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  for (const hopByHop of [
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+  ]) {
+    delete headers[hopByHop];
+  }
+  for (const opt of connectionOptions) {
+    delete headers[opt];
+  }
+  // Explicitly tell upstream to close the connection after this request.
+  // RFC 7230 §6.1: Connection describes a single transport-level hop; the
+  // proxy is a separate hop and must not propagate the client's connection
+  // semantics. Setting close here also overrides Node's http.request default
+  // of injecting `Connection: keep-alive` when no Connection header is set.
+  headers["connection"] = "close";
   return headers;
 }
 

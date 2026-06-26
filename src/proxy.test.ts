@@ -560,5 +560,91 @@ describe("Proxy Integration - Fibonacci, Decompression & Modes", () => {
     await new Promise<void>((resolve) => oracleProxy.close(() => resolve()));
     process.env.LLM_INSPECTOR_CAPTURE_DIR = testCaptureDir;
   });
+
+  // RFC 7230 §6.1 hop-by-hop headers must NOT be forwarded by the proxy.
+  // These describe a single transport-level connection, not the resource.
+  // Pre-fix: only transfer-encoding was stripped; Connection, Keep-Alive,
+  // Proxy-Authenticate, Proxy-Authorization, TE, Trailer, Upgrade leaked.
+  // Post-fix: all 8 standard hop-by-hop headers + Connection-listed options
+  // are stripped.
+  //
+  // NOTE: uses raw http.request (not fetch) because undici validates the
+  // Connection header and rejects unknown connection-option names — but
+  // RFC 7230 §6.1 explicitly permits arbitrary names there.
+  it("strips hop-by-hop headers per RFC 7230 §6.1 before forwarding to upstream", async () => {
+    const HOP_PORT = PROXY_PORT + 8;
+    upstreamRequests = [];
+    gzipResponse = false;
+
+    const hopProxy = await startProxy({
+      port: HOP_PORT,
+      upstream: `http://127.0.0.1:${UPSTREAM_PORT}`,
+      verbose: false,
+      toolMode: "observe",
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      const req = http.request(
+        {
+          host: "127.0.0.1",
+          port: HOP_PORT,
+          path: "/v1/messages",
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            // Hop-by-hop headers that must NOT reach upstream
+            connection: "keep-alive, x-custom-hop-option",
+            "keep-alive": "timeout=5, max=10",
+            "proxy-authorization": "Basic c2VjcmV0OnRva2Vu",
+            "proxy-authenticate": "Basic realm=upstream",
+            te: "trailers",
+            trailer: "Expires",
+            "transfer-encoding": "chunked",
+            upgrade: "h2c",
+            // Must-stay headers — sanity check we didn't go too far
+            authorization: "Bearer keep-this",
+            "x-api-key": "keep-this-too",
+          },
+        },
+        (res) => {
+          expect(res.statusCode).toBe(200);
+          res.resume();
+          res.on("end", resolve);
+          res.on("error", reject);
+        },
+      );
+      req.on("error", reject);
+      req.end(JSON.stringify({ test: "hop-by-hop" }));
+    });
+
+    expect(upstreamRequests.length).toBeGreaterThanOrEqual(1);
+    const fwdHeaders = upstreamRequests[0].headers;
+
+    // The proxy opens its own connection to upstream, so it explicitly sets
+    // Connection: close (RFC 7230 §6.1 — connection describes a single hop;
+    // proxy must not propagate client's transport-level semantics). Verify
+    // the proxy's explicit value is what's forwarded, NOT the client's value.
+    expect(fwdHeaders["connection"]).toBe("close");
+
+    // Other hop-by-hop headers must be stripped
+    expect(fwdHeaders["keep-alive"]).toBeUndefined();
+    expect(fwdHeaders["proxy-authorization"]).toBeUndefined();
+    expect(fwdHeaders["proxy-authenticate"]).toBeUndefined();
+    expect(fwdHeaders["te"]).toBeUndefined();
+    expect(fwdHeaders["trailer"]).toBeUndefined();
+    expect(fwdHeaders["transfer-encoding"]).toBeUndefined();
+    expect(fwdHeaders["upgrade"]).toBeUndefined();
+
+    // x-custom-hop-option (named in Connection: header) must also be stripped
+    expect(fwdHeaders["x-custom-hop-option"]).toBeUndefined();
+
+    // Must-stay headers must survive
+    expect(fwdHeaders["authorization"]).toBe("Bearer keep-this");
+    expect(fwdHeaders["x-api-key"]).toBe("keep-this-too");
+    // host header is rewritten by buildForwardHeaders — verify it's the upstream host
+    expect(fwdHeaders["host"]).toBe(`127.0.0.1:${UPSTREAM_PORT}`);
+
+    await new Promise<void>((resolve) => hopProxy.close(() => resolve()));
+  });
 });
 
