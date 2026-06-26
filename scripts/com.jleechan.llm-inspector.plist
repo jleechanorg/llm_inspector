@@ -24,8 +24,10 @@
     <string>/Users/jleechan/.llm-inspector/launchd.err.log</string>
     <key>EnvironmentVariables</key>
     <dict>
+        <!-- Forward to ccproxy-api on port 8000 (its default). -->
+        <!-- Remove this env var to let llm-inspector auto-start ccproxy if needed. -->
         <key>LLM_INSPECTOR_UPSTREAM</key>
-        <string>http://127.0.0.1:8001</string>
+        <string>http://127.0.0.1:8000</string>
         <key>LLM_INSPECTOR_TOOL_MODE</key>
         <string>observe</string>
     </dict>

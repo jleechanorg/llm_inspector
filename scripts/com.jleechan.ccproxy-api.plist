@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jleechan.ccproxy-api</string>
+    <key>ProgramArguments</key>
+    <array>
+        <!-- Installed by uv tool install ccproxy-api to ~/.local/bin/ccproxy.
+             Update this path if you installed ccproxy elsewhere. -->
+        <string>/Users/jleechan/.local/bin/ccproxy</string>
+        <string>serve</string>
+        <string>--port</string>
+        <string>8000</string>
+    </array>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>/Users/jleechan/.llm-inspector/ccproxy.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jleechan/.llm-inspector/ccproxy.err.log</string>
+    <!-- Launchd populates PATH minimally; ensure ccproxy's Python env is found. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/jleechan/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

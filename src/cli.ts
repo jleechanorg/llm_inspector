@@ -291,6 +291,23 @@ program
       console.log("Proxy: STOPPED");
     }
 
+    // ── Show ccproxy status (port 8000) ──────────────────────────────────
+    // The capture chain requires ccproxy-api on :8000 to be running.
+    // llm-inspector start auto-launches ccproxy if needed, but report
+    // its state here so users can see whether the chain is complete.
+    let ccproxyRunning = false;
+    try {
+      execSync("lsof -ti:8000", { stdio: "pipe" });
+      ccproxyRunning = true;
+    } catch {
+      ccproxyRunning = false;
+    }
+    if (ccproxyRunning) {
+      console.log("ccproxy: RUNNING (port 8000)");
+    } else {
+      console.log("ccproxy: STOPPED (port 8000) — start with: llm-inspector start");
+    }
+
     const captureDir = await ensureCaptureDir();
     try {
       const files = await readdir(captureDir);
