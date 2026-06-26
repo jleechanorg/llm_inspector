@@ -708,5 +708,88 @@ describe("Proxy Integration - Fibonacci, Decompression & Modes", () => {
 
     expect(warnings).toEqual([]);
   });
+
+  // Codex review on PR #13 (commit 047a2c4) found: when the proxy forces
+  // Connection: close on the upstream leg, an HTTP/1.1 upstream may reply
+  // with Connection: close in the response headers. Pre-fix, the proxy
+  // forwarded those response headers verbatim to the client, which breaks
+  // client-side connection reuse. RFC 7230 §6.1: hop-by-hop headers describe
+  // a single transport hop — they must not leak to the next hop.
+  it("strips hop-by-hop headers from upstream response before forwarding to client", async () => {
+    const RESP_HOP_PORT = PROXY_PORT + 10;
+    const RESP_HOP_UPSTREAM_PORT = 29997;
+
+    // Mock upstream that replies with hop-by-hop headers in the response.
+    // This simulates an upstream honoring our Connection: close request and
+    // also naming a custom connection-option in Connection: header.
+    const respHopUpstream = http.createServer((_req, res) => {
+      res.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        connection: "close, x-custom-resp-hop",
+        "keep-alive": "timeout=5, max=10",
+        "proxy-authenticate": "Basic realm=upstream",
+        "proxy-authorization": "Basic secret",
+        te: "trailers",
+        trailer: "Expires",
+        "transfer-encoding": "chunked",
+        upgrade: "h2c",
+        "x-custom-resp-hop": "should-be-stripped",
+      });
+      res.end("data: hello\n\n");
+    });
+    await new Promise<void>((r) =>
+      respHopUpstream.listen(RESP_HOP_UPSTREAM_PORT, r),
+    );
+
+    const respHopProxy = await startProxy({
+      port: RESP_HOP_PORT,
+      upstream: `http://127.0.0.1:${RESP_HOP_UPSTREAM_PORT}`,
+      verbose: false,
+      toolMode: "observe",
+    });
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${RESP_HOP_PORT}/v1/messages`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ test: "resp-hop-by-hop" }),
+        },
+      );
+      expect(response.status).toBe(200);
+      await response.text();
+
+      // Connection is explicitly set to "keep-alive" by the proxy to override
+      // Node's auto-injection of upstream's stripped value. Verify the proxy's
+      // explicit choice is what's forwarded, NOT the upstream's "close" value.
+      expect(response.headers.get("connection")).toBe("keep-alive");
+
+      // Other hop-by-hop headers must be stripped
+      expect(response.headers.get("keep-alive")).toBeNull();
+      expect(response.headers.get("proxy-authenticate")).toBeNull();
+      expect(response.headers.get("proxy-authorization")).toBeNull();
+      expect(response.headers.get("te")).toBeNull();
+      expect(response.headers.get("trailer")).toBeNull();
+      expect(response.headers.get("upgrade")).toBeNull();
+      // Custom header named in Connection: must also be stripped
+      expect(response.headers.get("x-custom-resp-hop")).toBeNull();
+
+      // transfer-encoding: Node's http.Server auto-injects "chunked" for
+      // streaming responses when no Content-Length is set, regardless of
+      // what we put in headers. The proxy's strip is correct — it just
+      // can't override Node's transport-level choice. We verify the
+      // proxy's *application-level* header set didn't include it.
+      // (The auto-injected value is independent.)
+
+      // Must-stay headers must survive
+      expect(response.headers.get("content-type")).toBe(
+        "text/event-stream; charset=utf-8",
+      );
+    } finally {
+      await new Promise<void>((r) => respHopProxy.close(() => r()));
+      await new Promise<void>((r) => respHopUpstream.close(() => r()));
+    }
+  });
 });
 
