@@ -106,8 +106,78 @@ function buildForwardHeaders(
     delete headers["content-length"];
   }
   delete headers["accept-encoding"];
-  delete headers["transfer-encoding"];
+  // RFC 7230 §6.1 hop-by-hop header stripping. These describe a single
+  // transport-level connection, not the resource, and must not be
+  // forwarded when the proxy opens its own connection to upstream.
+  // Also parses `Connection:` to extract named connection-options
+  // (e.g., "Connection: keep-alive, X-Custom" — strip X-Custom too).
+  const connectionOptions = (headers["connection"] ?? "")
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  for (const hopByHop of [
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+  ]) {
+    delete headers[hopByHop];
+  }
+  for (const opt of connectionOptions) {
+    delete headers[opt];
+  }
+  // Explicitly tell upstream to close the connection after this request.
+  // RFC 7230 §6.1: Connection describes a single transport-level hop; the
+  // proxy is a separate hop and must not propagate the client's connection
+  // semantics. Setting close here also overrides Node's http.request default
+  // of injecting `Connection: keep-alive` when no Connection header is set.
+  headers["connection"] = "close";
   return headers;
+}
+
+// Strip hop-by-hop headers from an upstream response (RFC 7230 §6.1).
+// Returns a new headers object with Connection, Keep-Alive, Proxy-Authenticate,
+// Proxy-Authorization, TE, Trailer, Transfer-Encoding, Upgrade removed, plus
+// any headers named in the Connection: header value. Used before forwarding
+// upstream response headers to the client.
+function stripHopByHopResponseHeaders(
+  source: http.IncomingHttpHeaders,
+): http.IncomingHttpHeaders {
+  const out: http.IncomingHttpHeaders = { ...source };
+  stripHopByHopResponseHeadersInPlace(out);
+  return out;
+}
+
+function stripHopByHopResponseHeadersInPlace(
+  headers: Record<string, string | string[] | undefined>,
+): void {
+  const rawConnection = headers["connection"];
+  const connectionValue = Array.isArray(rawConnection)
+    ? rawConnection.join(",")
+    : (rawConnection ?? "");
+  const connectionOptions = connectionValue
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  for (const hopByHop of [
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+  ]) {
+    delete headers[hopByHop];
+  }
+  for (const opt of connectionOptions) {
+    delete headers[opt];
+  }
 }
 
 function parseSSEForStubbedTools(
@@ -199,7 +269,8 @@ async function reIssueWithFullSchema(
   stubbedTools: Map<string, unknown>,
   upstream: URL,
   forwardHeaders: Record<string, string>,
-  clientReq?: http.IncomingMessage,
+  clientReq: http.IncomingMessage | undefined,
+  timeoutMs: number,
 ): Promise<{ body: string; status: number }> {
   const fullTools = originalBody.tools
     ? (originalBody.tools as unknown[]).map((tool) => {
@@ -225,7 +296,7 @@ async function reIssueWithFullSchema(
     const transport = upstream.protocol === "https:" ? https : http;
     const req = transport.request(
       upstream.href,
-      { method: "POST", headers, timeout: 120000 },
+      { method: "POST", headers, timeout: timeoutMs },
       (res) => {
         const chunks: Buffer[] = [];
         // Detect gzip on the re-issue response. Some upstreams ignore the
@@ -423,6 +494,9 @@ export interface StartProxyOptions {
   upstream?: string;
   verbose?: boolean;
   toolMode?: ToolMode;
+  /** Upstream socket timeout in ms (default 120000). Used by tests to
+   *  trigger the timeout path without waiting 2 minutes per request. */
+  timeoutMs?: number;
 }
 
 export async function startProxy(
@@ -437,6 +511,7 @@ export async function startProxy(
     (process.env.LLM_INSPECTOR_TOOL_MODE as string | undefined) ||
     "observe";
   const modes = parseModeFeatures(toolModeStr);
+  const upstreamTimeoutMs = options.timeoutMs ?? 120000;
 
   const captureDir = await ensureCaptureDir();
 
@@ -490,9 +565,18 @@ export async function startProxy(
 
       const proxyReq = transport.request(
         upstream.href,
-        { method: "GET", headers: forwardHeaders, timeout: 120000 },
+        { method: "GET", headers: forwardHeaders, timeout: upstreamTimeoutMs },
         (proxyRes) => {
-          res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
+          // Strip hop-by-hop headers from upstream response per RFC 7230 §6.1.
+          // Without this, an upstream that honored our request's Connection: close
+          // will reply with Connection: close, which would propagate to the client
+          // and disable client-side connection reuse. Hop-by-hop headers describe
+          // a single transport hop — they don't apply to the next hop. Set
+          // Connection: keep-alive explicitly to override Node's auto-injection
+          // of the upstream's stripped value.
+          const responseHeaders = stripHopByHopResponseHeaders(proxyRes.headers);
+          responseHeaders["connection"] = "keep-alive";
+          res.writeHead(proxyRes.statusCode || 200, responseHeaders);
 
           proxyRes.on("error", (err) => {
             console.error(`[llm-inspector] Proxy response error: ${err.message}`);
@@ -684,7 +768,7 @@ export async function startProxy(
 
     const proxyReq = transport.request(
       upstream.href,
-      { method, headers: forwardHeaders, timeout: 120000 },
+      { method, headers: forwardHeaders, timeout: upstreamTimeoutMs },
       (proxyRes) => {
         const statusCode = proxyRes.statusCode || 200;
         const contentType = (proxyRes.headers["content-type"] as string) || "";
@@ -709,6 +793,10 @@ export async function startProxy(
         // Build the headers we forward to the client. When gzip, drop
         // content-encoding (we'll decompress) and content-length (will differ).
         // `transfer-encoding: chunked` (if present) is preserved automatically.
+        // Also strip hop-by-hop headers (Connection, Keep-Alive, etc.) per RFC 7230 §6.1 —
+        // these describe a single transport hop and must not leak to the client.
+        // Set Connection: keep-alive explicitly to override Node's auto-injection
+        // of the upstream's stripped value (e.g., Connection: close).
         const forwardResponseHeaders: Record<string, string | string[]> = {};
         for (const [k, v] of Object.entries(proxyRes.headers)) {
           if (v === undefined) continue;
@@ -717,6 +805,8 @@ export async function startProxy(
           }
           forwardResponseHeaders[k] = v;
         }
+        stripHopByHopResponseHeadersInPlace(forwardResponseHeaders);
+        forwardResponseHeaders["connection"] = "keep-alive";
         for (const [k, v] of Object.entries(forwardResponseHeaders)) {
           captureRes.setHeader(k, v);
         }
@@ -855,6 +945,7 @@ export async function startProxy(
                     upstream,
                     forwardHeaders,
                     req,
+                    upstreamTimeoutMs,
                   );
 
                 let reIssuedUsage:
