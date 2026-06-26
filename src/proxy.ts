@@ -228,7 +228,8 @@ async function reIssueWithFullSchema(
   stubbedTools: Map<string, unknown>,
   upstream: URL,
   forwardHeaders: Record<string, string>,
-  clientReq?: http.IncomingMessage,
+  clientReq: http.IncomingMessage | undefined,
+  timeoutMs: number,
 ): Promise<{ body: string; status: number }> {
   const fullTools = originalBody.tools
     ? (originalBody.tools as unknown[]).map((tool) => {
@@ -254,7 +255,7 @@ async function reIssueWithFullSchema(
     const transport = upstream.protocol === "https:" ? https : http;
     const req = transport.request(
       upstream.href,
-      { method: "POST", headers, timeout: 120000 },
+      { method: "POST", headers, timeout: timeoutMs },
       (res) => {
         const chunks: Buffer[] = [];
         // Detect gzip on the re-issue response. Some upstreams ignore the
@@ -452,6 +453,9 @@ export interface StartProxyOptions {
   upstream?: string;
   verbose?: boolean;
   toolMode?: ToolMode;
+  /** Upstream socket timeout in ms (default 120000). Used by tests to
+   *  trigger the timeout path without waiting 2 minutes per request. */
+  timeoutMs?: number;
 }
 
 export async function startProxy(
@@ -466,6 +470,7 @@ export async function startProxy(
     (process.env.LLM_INSPECTOR_TOOL_MODE as string | undefined) ||
     "observe";
   const modes = parseModeFeatures(toolModeStr);
+  const upstreamTimeoutMs = options.timeoutMs ?? 120000;
 
   const captureDir = await ensureCaptureDir();
 
@@ -519,7 +524,7 @@ export async function startProxy(
 
       const proxyReq = transport.request(
         upstream.href,
-        { method: "GET", headers: forwardHeaders, timeout: 120000 },
+        { method: "GET", headers: forwardHeaders, timeout: upstreamTimeoutMs },
         (proxyRes) => {
           res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
 
@@ -713,7 +718,7 @@ export async function startProxy(
 
     const proxyReq = transport.request(
       upstream.href,
-      { method, headers: forwardHeaders, timeout: 120000 },
+      { method, headers: forwardHeaders, timeout: upstreamTimeoutMs },
       (proxyRes) => {
         const statusCode = proxyRes.statusCode || 200;
         const contentType = (proxyRes.headers["content-type"] as string) || "";
@@ -884,6 +889,7 @@ export async function startProxy(
                     upstream,
                     forwardHeaders,
                     req,
+                    upstreamTimeoutMs,
                   );
 
                 let reIssuedUsage:

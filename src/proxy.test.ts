@@ -646,5 +646,67 @@ describe("Proxy Integration - Fibonacci, Decompression & Modes", () => {
 
     await new Promise<void>((resolve) => hopProxy.close(() => resolve()));
   });
+
+  // PR #10 listener-leak regression: when the proxy times out on an upstream
+  // request, the onClientClose listener attached to `req` (proxy.ts:546) MUST
+  // be removed (proxy.ts:549). Pre-fix, this listener stayed attached to req
+  // even after the proxy gave up — each timed-out request leaked one
+  // listener, eventually hitting MaxListenersExceededWarning.
+  //
+  // Test approach: drive many requests through the proxy with a very short
+  // timeoutMs against a hanging upstream. If the listener leaks, after ~11
+  // requests Node emits a MaxListenersExceededWarning. We catch this via
+  // process.on('warning') and fail the test.
+  it("removes onClientClose listener on upstream timeout (PR #10 listener-leak regression)", async () => {
+    const LEAK_PORT = PROXY_PORT + 9;
+    const HANG_UPSTREAM_PORT = 29998;
+
+    // Mock upstream that accepts the connection but never responds, forcing
+    // the proxy to hit its timeout path.
+    const hangUpstream = http.createServer(() => {
+      // Intentionally never call res.end() — proxy must time out.
+    });
+    await new Promise<void>((r) =>
+      hangUpstream.listen(HANG_UPSTREAM_PORT, r),
+    );
+
+    const leakProxy = await startProxy({
+      port: LEAK_PORT,
+      upstream: `http://127.0.0.1:${HANG_UPSTREAM_PORT}`,
+      verbose: false,
+      toolMode: "observe",
+      timeoutMs: 100,
+    });
+
+    const warnings: string[] = [];
+    const warningHandler = (w: Error) => {
+      if (w.message.includes("MaxListenersExceededWarning")) {
+        warnings.push(w.message);
+      }
+    };
+    process.on("warning", warningHandler);
+
+    try {
+      // Drive 20 timed-out requests. Pre-PR-#10 this would leak ~20 listeners
+      // across each IncomingMessage; Node's default warning threshold is 10
+      // so the warning fires well before 20.
+      for (let i = 0; i < 20; i++) {
+        const r = await fetch(`http://127.0.0.1:${LEAK_PORT}/v1/messages`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ i }),
+        }).catch(() => null);
+        // Each request will time out at 100ms; total ~2s of test time.
+        // Either a 502 response or fetch rejection is acceptable.
+        if (r) await r.text().catch(() => "");
+      }
+    } finally {
+      process.off("warning", warningHandler);
+      await new Promise<void>((r) => leakProxy.close(() => r()));
+      await new Promise<void>((r) => hangUpstream.close(() => r()));
+    }
+
+    expect(warnings).toEqual([]);
+  });
 });
 
