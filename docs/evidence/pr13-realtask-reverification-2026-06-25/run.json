@@ -1,0 +1,28 @@
+{
+  "scenarios": [
+    {
+      "name": "Claude CLI HEAD health probe through proxy",
+      "campaign_id": "real-claude-cli-2026-06-25",
+      "layer": 3,
+      "duration_ms": 100,
+      "errors": [],
+      "request_size_bytes": 0,
+      "response_size_bytes": 0,
+      "upstream": "http://127.0.0.1:8001",
+      "verdict": "proxy correctly forwarded HEAD probe"
+    },
+    {
+      "name": "Claude CLI POST /v1/messages through proxy",
+      "campaign_id": "real-claude-cli-2026-06-25",
+      "layer": 3,
+      "duration_ms": 1000,
+      "errors": [
+        "Upstream returned 413 PayloadTooLargeError (supergateway 32MB limit, unrelated to proxy)"
+      ],
+      "request_size_bytes": 189873,
+      "response_size_bytes": 1758,
+      "upstream": "http://127.0.0.1:8001",
+      "verdict": "proxy correctly forwarded 189873B request and returned upstream's 413 response to client with hop-by-hop headers stripped"
+    }
+  ]
+}

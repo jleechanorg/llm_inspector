@@ -1,0 +1,30 @@
+{
+  "bundle_version": "1.0",
+  "bundle_timestamp": "2026-06-25T20:27:00Z",
+  "run_id": "pr13-realtask-reverification-2026-06-25",
+  "iteration": 1,
+  "claim": "PR #13 closes hop-by-hop header stripping bug (RFC 7230 §6.1) on both request and response sides. Verified by real Claude Code session through post-fix proxy.",
+  "git_provenance": {
+    "repo": "jleechanorg/llm_inspector",
+    "pr": "13",
+    "merged_commit_sha": "13c57c1588bf9cfa88c496027af796b8e86462e1",
+    "base_sha": "39c9689d27edeec88cf928c3d6a74e9f07a8f0e9",
+    "branch": "fix/hop-by-hop-headers-rfc7230"
+  },
+  "server": {
+    "proxy_port": 9000,
+    "upstream": "http://127.0.0.1:8001",
+    "tool_mode": "observe",
+    "node_version": "v22.22.0"
+  },
+  "sha256_oracle": {
+    "cli_js": "673bc8bede7b920f0e3661b7ffa341a7e1f5852f4c8e7578ddc81da4dd9ca669",
+    "cli_d_ts": "a59c47872b71f12589942892464e764c0db350c20b72228645615cc36e0a0725",
+    "frozen_payload_sha256": "92bc7bd1726eefb2a3bbcfb22e76e95660cde87d17a5bfdd2976678865f78a6e"
+  },
+  "test_layers": [
+    {"layer": 1, "source": "unit test + build artifact", "proves": "hop-by-hop stripping code works in isolation"},
+    {"layer": 2, "source": "in-process integration with mock upstream", "proves": "end-to-end request/response cycle through real proxy code"},
+    {"layer": 3, "source": "real Claude Code session", "proves": "proxy works in production with real Claude CLI traffic"}
+  ]
+}

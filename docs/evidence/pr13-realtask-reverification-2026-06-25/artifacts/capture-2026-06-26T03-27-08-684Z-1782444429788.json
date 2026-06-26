@@ -1,0 +1,23 @@
+{
+  "timestamp": "2026-06-26T03:27:08.684Z",
+  "method": "HEAD",
+  "path": "/",
+  "url": "/",
+  "headers": {
+    "connection": "keep-alive",
+    "user-agent": "Bun/1.4.0",
+    "accept": "*/*",
+    "host": "localhost:9000",
+    "accept-encoding": "gzip, deflate, br, zstd"
+  },
+  "body": {
+    "_raw": ""
+  },
+  "bodySize": 0,
+  "request_raw": "HEAD / HTTP/1.1\r\nconnection: keep-alive\r\nuser-agent: Bun/1.4.0\r\naccept: */*\r\nhost: localhost:9000\r\naccept-encoding: gzip, deflate, br, zstd\r\n\r\nBODY_BASE64:",
+  "response": {
+    "status": 404,
+    "body": ""
+  },
+  "response_raw": "HTTP/1.1 404 OK\r\nx-powered-by: Express\r\ncontent-security-policy: default-src 'none'\r\nx-content-type-options: nosniff\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: 140\r\ndate: Fri, 26 Jun 2026 03:27:09 GMT\r\nconnection: keep-alive\r\n\r\n"
+}

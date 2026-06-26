@@ -1,0 +1,7 @@
+[llm-inspector] Proxy started on port 9000
+[llm-inspector] Captures saved to /Users/jleechan/projects_other/llm_inspector/.test-captures/realtask-2026-06-25
+[llm-inspector] Set ANTHROPIC_BASE_URL=http://localhost:9000 to capture Claude Code traffic
+[llm-inspector] HEAD / -> http://127.0.0.1:8001/ (unknown, 0B -> 0B)
+[llm-inspector] POST /v1/messages -> http://127.0.0.1:8001/v1/messages?beta=true (claude-sonnet-4-6, 189913B -> 189913B)
+[llm-inspector] HEAD / -> http://127.0.0.1:8001/ (unknown, 0B -> 0B)
+[llm-inspector] POST /v1/messages -> http://127.0.0.1:8001/v1/messages?beta=true (claude-haiku-4-5, 189873B -> 189873B)

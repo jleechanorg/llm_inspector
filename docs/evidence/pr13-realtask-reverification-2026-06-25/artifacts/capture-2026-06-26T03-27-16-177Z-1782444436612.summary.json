@@ -1,0 +1,7 @@
+{
+  "model": "claude-haiku-4-5",
+  "system_prompt": 27764,
+  "builtin_tools": 53176,
+  "messages": 108508,
+  "total_body_size": 189873
+}
