@@ -20,9 +20,9 @@ is verified by:
 
 | Artifact | Purpose | Source |
 |----------|---------|--------|
-| `artifacts/capture-2026-06-26T03-27-08-684Z-1782444429789.json` | HEAD / probe (Claude CLI health check) | [Layer 3 source: real Claude CLI] |
+| `artifacts/capture-2026-06-26T03-27-08-684Z-1782444429788.json` | HEAD / probe (Claude CLI health check) | [Layer 3 source: real Claude CLI] |
 | `artifacts/capture-2026-06-26T03-27-16-177Z-1782444436612.json` | POST /v1/messages — main LLM call | [Layer 3 source: real Claude CLI] |
-| `artifacts/capture-2026-06-26T03-27-08-684Z-1782444429789.summary.json` | HEAD summary | [Layer 3 source: real Claude CLI] |
+| `artifacts/capture-2026-06-26T03-27-08-684Z-1782444429788.summary.json` | HEAD summary | [Layer 3 source: real Claude CLI] |
 | `artifacts/capture-2026-06-26T03-27-16-177Z-1782444436612.summary.json` | POST summary (189873B body, model=claude-haiku-4-5) | [Layer 3 source: real Claude CLI] |
 | `artifacts/proxy-server.log` | Proxy log showing request/response sizes and upstream forwarding | [Layer 3 source: real Claude CLI] |
 | `artifacts/cli.js` | Proxy build artifact (post-PR-#13 merged) | [Layer 1 source: build artifact] |
@@ -38,7 +38,7 @@ cd artifacts
 sha256sum -c sha256sums.txt
 ```
 
-Expected output: 8 OK lines (cli.js, cli.d.ts, proxy-server.log, 4 captures + 2 summaries).
+Expected output: 7 OK lines (cli.js, cli.d.ts, proxy-server.log, 2 captures + 2 summaries).
 
 ### 2. Verify SHA-256 byte-transparency of request
 
