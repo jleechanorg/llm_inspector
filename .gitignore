@@ -4,3 +4,8 @@ dist/
 .env
 /captures/
 .rtk/
+# Local Claude Code / Agent-Orchestrator session state — never versioned.
+# Each entry under .claude/worktrees/ is a transient worker worktree (full
+# checkout of the repo on a session-local branch) left behind by AO runs.
+# 15MB+ of duplicate repo state; not project source.
+.claude/
