@@ -1,0 +1,20 @@
+## applied-marker: # ccproxy-patches:0001:applied
+--- a/ccproxy/llms/models/anthropic.py
++++ b/ccproxy/llms/models/anthropic.py
+@@ -218,8 +218,15 @@
+     data: str
+ 
+ 
++# ccproxy-patches:0001:applied
+ RequestContentBlock = Annotated[
+-    TextBlock | ImageBlock | ToolUseBlock | ToolResultBlock, Field(discriminator="type")
++    TextBlock
++    | ImageBlock
++    | ToolUseBlock
++    | ToolResultBlock
++    | ThinkingBlock
++    | RedactedThinkingBlock,
++    Field(discriminator="type"),
+ ]
+ 
+ ResponseContentBlock = Annotated[

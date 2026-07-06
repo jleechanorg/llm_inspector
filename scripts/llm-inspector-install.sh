@@ -81,6 +81,16 @@ else
     fi
 fi
 
+# ── 1b. Apply ccproxy patches (idempotent — survives uv upgrades) ────────────
+if [ -d "$SCRIPT_DIR/ccproxy-patches" ]; then
+    info "Applying ccproxy patches..."
+    if bash "$SCRIPT_DIR/ccproxy-patches/apply.sh"; then
+        info "ccproxy patches applied successfully"
+    else
+        warn "ccproxy patches had failures — see output above"
+    fi
+fi
+
 # ── 2. Build llm-inspector ─────────────────────────────────────────────────────
 info "Building llm-inspector..."
 if [ ! -f "$REPO_DIR/package.json" ]; then
