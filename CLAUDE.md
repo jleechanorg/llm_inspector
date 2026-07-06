@@ -13,6 +13,24 @@ Claude Code → llm-inspector :9000 → ccproxy :8001 → Anthropic/MiniMax API
 - **Start**: `npm run start -- --upstream http://127.0.0.1:8001`
 - Raw HTTP fields: `request_raw` (full HTTP request) and `response_raw` (full HTTP response)
 
+## Claude Code → MiniMax backend (`claudem`)
+
+`~/.bashrc:996` defines `claudem()` as a wrapper that invokes the `claude` CLI against the **MiniMax-M3** backend instead of Anthropic:
+
+```bash
+claudem() {
+  CLAUDEM_MODE=1 \
+  ANTHROPIC_BASE_URL="https://api.minimax.io/anthropic" \
+  ANTHROPIC_AUTH_TOKEN="$MINIMAX_API_KEY" \
+  ANTHROPIC_API_KEY="$MINIMAX_API_KEY" \
+  ANTHROPIC_MODEL="MiniMax-M3" \
+  CLAUDE_CODE_ENABLE_EXPERIMENTAL_ADVISOR_TOOL=0 \
+  claude --dangerously-skip-permissions --teammate-mode=tmux --effort high --model MiniMax-M3 "$@"
+}
+```
+
+Aliases: `claudeme()` (typo helper, line 1007), `claudemc()` (`--continue`, line 1011). `WIKI_AGENT=claudem` (line 1164) routes `~/llm_wiki` edits through the MiniMax backend. Note: `--model MiniMax-M3` can persist into `.claude/settings.json` — be aware when switching back to `claude`. Do not edit `claudem()` itself (Bashrc wrappers are user-owned config — global rule in `~/.claude/CLAUDE.md`).
+
 ## Key Files
 
 - `src/` - TypeScript source
