@@ -115,7 +115,22 @@ This is the overhead before any user content. At ~53K tokens per turn, a 200K co
 | `llm-inspector analyze --last 5` | Only analyze last 5 captures |
 | `llm-inspector analyze --sort tokens` | Sort by estimated token count |
 | `llm-inspector analyze --json` | Output as JSON |
+| `llm-inspector analyze --skills-usage` | Report Claude Code skill/slash-command usage from session logs (last 30 days) |
+| `llm-inspector analyze --skills-usage --days 7` | Same, over a custom time window |
 | `llm-inspector clean` | Remove all captured request files |
+
+### `--skills-usage`
+
+Scans Claude Code session logs (`~/.claude/projects/*/*.jsonl`) for Skill-tool
+invocations and `<command-name>` slash-command usage, and reports how often
+each was used within a time window (default: 30 days).
+
+```bash
+llm-inspector analyze --skills-usage
+llm-inspector analyze --skills-usage --days 7
+llm-inspector analyze --skills-usage --json
+llm-inspector analyze --skills-usage --projects-dir /path/to/.claude/projects
+```
 
 ## ccproxy Setup
 
