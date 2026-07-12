@@ -14,7 +14,8 @@
     "dev": "tsup src/cli.ts --format esm --watch",
     "test": "vitest run src/",
     "test:watch": "vitest",
-    "test:side-by-side": "node scripts/test-side-by-side.mjs"
+    "test:side-by-side": "node scripts/test-side-by-side.mjs",
+    "test:codex-e2e": "node scripts/test-codex-e2e.mjs"
   },
   "dependencies": {
     "chalk": "^5.3.0",

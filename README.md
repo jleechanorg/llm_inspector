@@ -87,6 +87,56 @@ claude --print "What is 2+2?"
 llm-inspector analyze
 ```
 
+## Using with Codex
+
+The same proxy transparently captures Codex CLI traffic — no separate mode needed.
+
+```bash
+# Start the proxy pointing at your OpenAI-compatible upstream
+llm-inspector start --upstream https://api.openai.com
+
+# Point Codex at the proxy. The path goes through verbatim because --upstream
+# is set (no /claude prefix is added).
+export OPENAI_BASE_URL=http://localhost:9000
+codex "hello"
+```
+
+> Codex pins its provider base URL via `config.toml`, not `OPENAI_BASE_URL` alone. To route Codex through the proxy, add a custom provider to `$CODEX_HOME/config.toml`:
+>
+> ```toml
+> model_provider = "openai-custom"
+> model = "gpt-5-mini"
+>
+> [model_providers.openai-custom]
+> name = "OpenAI (proxy)"
+> base_url = "http://localhost:9000/v1"
+> wire_api = "responses"
+> ```
+>
+> The built-in `openai` provider name is reserved, so use a custom name like `openai-custom`.
+
+### Sandbox for testing
+
+When testing the Codex integration without touching your real `~/.codex/`:
+
+```bash
+SANDBOX=/tmp/codex-test
+mkdir -p $SANDBOX
+echo '{"OPENAI_API_KEY":"sk-fake"}' > $SANDBOX/auth.json
+
+# Write the config above into $SANDBOX/config.toml
+
+CODEX_HOME=$SANDBOX OPENAI_API_KEY=sk-fake codex exec 'ping'
+```
+
+Or run the bundled E2E harness:
+
+```bash
+node scripts/test-codex-e2e.mjs
+```
+
+The harness spins up a mock OpenAI upstream on `:19001`, starts the proxy with `--upstream http://127.0.0.1:19001`, runs a sandboxed `codex exec ping` against `CODEX_HOME=/tmp/codex-test-e2e`, and asserts the request was captured. Your real `~/.codex/` is never touched.
+
 ## What It Measures
 
 Baseline from a real Claude Code session (`claude --print "What is 2+2?"`, claude-haiku):
