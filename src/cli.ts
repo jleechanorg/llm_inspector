@@ -26,6 +26,7 @@ import {
   formatBytes,
 } from "./utils.js";
 import { analyzeCaptures, formatAnalysis } from "./analyzer.js";
+import { scanSkillsUsage, formatSkillsUsage } from "./skills-usage.js";
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -233,7 +234,35 @@ program
     "time",
   )
   .option("--dir <path>", "Custom capture directory")
+  .option(
+    "--skills-usage",
+    "Report Claude Code skill/slash-command usage from session logs instead of capture analysis",
+  )
+  .option(
+    "--days <n>",
+    "Time window in days for --skills-usage (default: 30)",
+    "30",
+  )
+  .option(
+    "--projects-dir <path>",
+    "Override ~/.claude/projects for --skills-usage (mainly for testing)",
+  )
   .action(async (opts) => {
+    if (opts.skillsUsage) {
+      const days = opts.days ? parseInt(opts.days, 10) : undefined;
+      const result = await scanSkillsUsage({
+        projectsDir: opts.projectsDir,
+        days,
+      });
+
+      if (opts.json) {
+        console.log(JSON.stringify(result, null, 2));
+      } else {
+        console.log(formatSkillsUsage(result));
+      }
+      return;
+    }
+
     const dir = opts.dir || undefined;
     const last = opts.last ? parseInt(opts.last, 10) : undefined;
     const sort = opts.sort || "time";
