@@ -793,3 +793,225 @@ describe("Proxy Integration - Fibonacci, Decompression & Modes", () => {
   });
 });
 
+describe("Proxy Integration - Codex / OpenAI-format passthrough", () => {
+  // Codex CLI sets OPENAI_BASE_URL=http://localhost:9000 and sends requests
+  // to /v1/chat/completions and /v1/responses. With --upstream set, the proxy
+  // must pass the path verbatim (no /claude prefix) so any provider works.
+
+  const CODEX_CAPTURE_DIR = path.resolve(
+    __dirname,
+    "../.test-captures-codex",
+  );
+
+  // Pick ports that don't collide with the main describe block (19998, 19999, 20000..20009)
+  const CODEX_PROXY_PORT = 20010;
+  const CODEX_UPSTREAM_PORT = 20011;
+
+  interface CapturedUpstreamHit {
+    method: string;
+    url: string;
+    headers: http.IncomingHttpHeaders;
+    body: string;
+  }
+
+  let upstreamHits: CapturedUpstreamHit[] = [];
+
+  beforeAll(async () => {
+    process.env.LLM_INSPECTOR_CAPTURE_DIR = CODEX_CAPTURE_DIR;
+    if (fs.existsSync(CODEX_CAPTURE_DIR)) {
+      fs.rmSync(CODEX_CAPTURE_DIR, { recursive: true, force: true });
+    }
+    fs.mkdirSync(CODEX_CAPTURE_DIR, { recursive: true });
+  });
+
+  afterAll(async () => {
+    if (fs.existsSync(CODEX_CAPTURE_DIR)) {
+      fs.rmSync(CODEX_CAPTURE_DIR, { recursive: true, force: true });
+    }
+  });
+
+  it("forwards POST /v1/chat/completions verbatim when --upstream is set", async () => {
+    upstreamHits = [];
+
+    // Mock OpenAI-style upstream: returns a canned chat.completions SSE stream
+    const codexUpstream = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        upstreamHits.push({
+          method: req.method || "",
+          url: req.url || "",
+          headers: req.headers,
+          body,
+        });
+        // Minimal OpenAI chat.completions streaming response
+        res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8" });
+        res.write(
+          'data: {"id":"chatcmpl-test","object":"chat.completion.chunk","choices":[{"delta":{"content":"pong"}}]}\n\n',
+        );
+        res.write("data: [DONE]\n\n");
+        res.end();
+      });
+    });
+    await new Promise<void>((r) =>
+      codexUpstream.listen(CODEX_UPSTREAM_PORT, "127.0.0.1", r),
+    );
+
+    const codexProxy = await startProxy({
+      port: CODEX_PROXY_PORT,
+      upstream: `http://127.0.0.1:${CODEX_UPSTREAM_PORT}`,
+      verbose: false,
+      toolMode: "observe",
+    });
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${CODEX_PROXY_PORT}/v1/chat/completions`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer sk-test-fake-token",
+          },
+          body: JSON.stringify({
+            model: "gpt-5-mini",
+            messages: [{ role: "user", content: "ping" }],
+            stream: true,
+          }),
+        },
+      );
+
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      expect(text).toContain("pong");
+
+      // Critical: upstream must see the path VERBATIM, not /claude/v1/...
+      // (the /claude prefix only applies to the default ccproxy upstream).
+      expect(upstreamHits).toHaveLength(1);
+      expect(upstreamHits[0].method).toBe("POST");
+      expect(upstreamHits[0].url).toBe("/v1/chat/completions");
+      expect(upstreamHits[0].url.startsWith("/claude/")).toBe(false);
+
+      // Authorization header must reach the upstream unchanged (proxy only
+      // redacts in the on-disk capture, not on the wire).
+      expect(upstreamHits[0].headers.authorization).toBe(
+        "Bearer sk-test-fake-token",
+      );
+
+      // Body bytes must round-trip intact
+      const parsed = JSON.parse(upstreamHits[0].body);
+      expect(parsed.model).toBe("gpt-5-mini");
+      expect(parsed.messages?.[0]?.content).toBe("ping");
+      expect(parsed.stream).toBe(true);
+
+      // Poll for the async capture write to flush (proxy saves fire-and-forget;
+      // file is created at zero bytes before writeFile finishes). The proxy
+      // writes two files per request: capture-*.json (full) and
+      // capture-*.summary.json — we want only the full capture.
+      const deadline = Date.now() + 5000;
+      let capturedFiles: string[] = [];
+      while (Date.now() < deadline) {
+        const all = fs.readdirSync(CODEX_CAPTURE_DIR);
+        capturedFiles = all.filter(
+          (f) => f.startsWith("capture-") && !f.endsWith(".summary.json"),
+        );
+        const allNonEmpty =
+          capturedFiles.length >= 1 &&
+          capturedFiles.every((f) =>
+            fs.statSync(path.join(CODEX_CAPTURE_DIR, f)).size > 0,
+          );
+        if (allNonEmpty) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+
+      // Capture file must exist with the codex request preserved
+      expect(capturedFiles.length).toBeGreaterThanOrEqual(1);
+      const last = JSON.parse(
+        fs.readFileSync(
+          path.join(CODEX_CAPTURE_DIR, capturedFiles[capturedFiles.length - 1]),
+          "utf-8",
+        ),
+      );
+      expect(last.method).toBe("POST");
+      expect(last.path).toBe("/v1/chat/completions");
+      // Authorization header must be redacted in the on-disk capture (not the wire).
+      // redactHeaders() in utils.ts preserves first 10 + last 4 chars, so the
+      // captured value should NOT equal the original bearer token.
+      expect(last.headers.authorization).not.toBe("Bearer sk-test-fake-token");
+      expect(last.headers.authorization).toContain("...");
+      // Body must include the messages array we sent
+      expect(last.body?.model).toBe("gpt-5-mini");
+    } finally {
+      await new Promise<void>((r) => codexProxy.close(() => r()));
+      await new Promise<void>((r) => codexUpstream.close(() => r()));
+    }
+  });
+
+  it("forwards POST /v1/responses (OpenAI Responses API) verbatim when --upstream is set", async () => {
+    upstreamHits = [];
+
+    const respUpstream = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (chunk) => (body += chunk));
+      req.on("end", () => {
+        upstreamHits.push({
+          method: req.method || "",
+          url: req.url || "",
+          headers: req.headers,
+          body,
+        });
+        res.writeHead(200, { "content-type": "text/event-stream; charset=utf-8" });
+        res.write(
+          'data: {"type":"response.created","response":{"id":"resp_test"}}\n\n',
+        );
+        res.write('data: {"type":"response.completed"}\n\n');
+        res.end();
+      });
+    });
+    await new Promise<void>((r) =>
+      respUpstream.listen(CODEX_UPSTREAM_PORT, "127.0.0.1", r),
+    );
+
+    const respProxy = await startProxy({
+      port: CODEX_PROXY_PORT,
+      upstream: `http://127.0.0.1:${CODEX_UPSTREAM_PORT}`,
+      verbose: false,
+      toolMode: "observe",
+    });
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${CODEX_PROXY_PORT}/v1/responses`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            authorization: "Bearer sk-test-fake",
+          },
+          body: JSON.stringify({
+            model: "gpt-5-mini",
+            input: "ping",
+            stream: true,
+          }),
+        },
+      );
+
+      expect(response.status).toBe(200);
+      const text = await response.text();
+      expect(text).toContain("response.created");
+
+      expect(upstreamHits).toHaveLength(1);
+      expect(upstreamHits[0].url).toBe("/v1/responses");
+      expect(upstreamHits[0].url.startsWith("/claude/")).toBe(false);
+      expect(upstreamHits[0].headers.authorization).toBe("Bearer sk-test-fake");
+
+      const parsed = JSON.parse(upstreamHits[0].body);
+      expect(parsed.model).toBe("gpt-5-mini");
+      expect(parsed.input).toBe("ping");
+    } finally {
+      await new Promise<void>((r) => respProxy.close(() => r()));
+      await new Promise<void>((r) => respUpstream.close(() => r()));
+    }
+  });
+});
+

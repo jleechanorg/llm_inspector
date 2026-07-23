@@ -3,6 +3,8 @@ dist/
 *.tgz
 .env
 /captures/
+/.test-captures/
+/.test-captures-codex/
 .rtk/
 # Local Claude Code / Agent-Orchestrator session state — never versioned.
 # Each entry under .claude/worktrees/ is a transient worker worktree (full
